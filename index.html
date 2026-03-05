@@ -934,6 +934,286 @@ async function reanalyzeEntry(date, ei){
 }
 
 // ════════════════════════
+// 🎯 条件別睡眠比較（得点圏打率的）
+// ════════════════════════
+function buildSleepConditionTable(){
+  const all = getAll();
+  const sleepDays = all.filter(d=>d.entries?.some(e=>e.category==='sleep'&&e.details?.duration_h));
+  if(sleepDays.length < 5) return '';
+
+  // Build condition groups: med x mp (4 combos)
+  const groups = {
+    '眠剤あり＋MP あり': [],
+    '眠剤あり＋MP なし': [],
+    '眠剤なし＋MP あり': [],
+    '眠剤なし＋MP なし': [],
+  };
+
+  sleepDays.forEach((day, di) => {
+    const se = day.entries.find(e=>e.category==='sleep'&&e.details?.duration_h);
+    const med = !!se.details?.medication;
+    const mp  = !!se.details?.mouthpiece;
+    const key = `眠剤${med?'あり':'なし'}＋MP ${mp?'あり':'なし'}`;
+    // Next day mood
+    const nextDay = all.find(d=>d.date === fmtOffset(day.date, 1));
+    const mood = nextDay?.mood || null;
+    groups[key].push({ h: se.details.duration_h, mood });
+  });
+
+  const rows = Object.entries(groups).map(([label, arr]) => {
+    if(!arr.length) return '';
+    const avgH = (arr.reduce((s,x)=>s+x.h,0)/arr.length).toFixed(1);
+    const moodArr = arr.filter(x=>x.mood);
+    const avgMood = moodArr.length ? (moodArr.reduce((s,x)=>s+x.mood,0)/moodArr.length).toFixed(1) : '—';
+    const moodEmoji = moodArr.length ? ['','😞','😕','😐','🙂','😄'][Math.round(parseFloat(avgMood))]||'' : '';
+    const n = arr.length;
+    return `<tr>
+      <td style="padding:8px 10px;font-size:11px;color:var(--chalk2)">${label}</td>
+      <td style="padding:8px 10px;text-align:center;font-family:var(--mono);font-size:12px;font-weight:700;color:#a0c0e8">${avgH}h</td>
+      <td style="padding:8px 10px;text-align:center;font-size:12px">${moodEmoji} ${avgMood}</td>
+      <td style="padding:8px 10px;text-align:center;font-size:10px;color:var(--chalk3)">${n}日</td>
+    </tr>`;
+  }).join('');
+
+  if(!rows.trim()) return '';
+  return `<div class="chart-card" style="margin-bottom:10px">
+    <div class="chart-head">🎯 条件別睡眠比較</div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--chalk3);font-weight:500">条件</th>
+        <th style="padding:6px 10px;text-align:center;font-size:9px;color:var(--chalk3);font-weight:500">平均睡眠</th>
+        <th style="padding:6px 10px;text-align:center;font-size:9px;color:var(--chalk3);font-weight:500">翌日気分</th>
+        <th style="padding:6px 10px;text-align:center;font-size:9px;color:var(--chalk3);font-weight:500">日数</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function fmtOffset(dateStr, days){
+  const d = new Date(dateStr.replace(/\./g,'-'));
+  d.setDate(d.getDate()+days);
+  return fmt(d);
+}
+
+// ════════════════════════
+// 📈 習慣継続率（出塁率的）
+// ════════════════════════
+function buildHabitRates(){
+  const all = getAll();
+  const n = Math.min(all.length, analysisPeriod===99999?all.length:analysisPeriod);
+  if(n < 7) return '';
+  const slice = all.slice(0, n);
+
+  const habits = [
+    { label:'🍱 食事記録', cat:'meal' },
+    { label:'✨ 肌ケア',   cat:'skin' },
+    { label:'🏃 運動',     cat:'body' },
+  ];
+
+  const bars = habits.map(h => {
+    const count = slice.filter(d=>d.entries?.some(e=>e.category===h.cat)).length;
+    const pct = Math.round(count/n*100);
+    const color = pct>=70?'var(--green-s)':pct>=40?'var(--accent2)':'var(--red-s)';
+    return `<div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:11px;color:var(--chalk2)">${h.label}</span>
+        <span style="font-family:var(--mono);font-size:12px;font-weight:700;color:${color}">${pct}%</span>
+      </div>
+      <div style="height:8px;background:var(--bg2);border-radius:4px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${color};border-radius:4px;transition:width .4s"></div>
+      </div>
+      <div style="font-size:9px;color:var(--chalk3);margin-top:2px">${count}日 / ${n}日</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="chart-card" style="margin-bottom:10px">
+    <div class="chart-head">📈 習慣継続率</div>
+    <div style="padding:4px 0">${bars}</div>
+  </div>`;
+}
+
+// ════════════════════════
+// 💤 睡眠詳細スコア（NPBプラス的）
+// ════════════════════════
+function buildSleepScore(){
+  const all = getAll();
+  const sleepEntries = all.slice(0, Math.min(all.length,30))
+    .flatMap(d=>d.entries||[]).filter(e=>e.category==='sleep'&&e.details?.duration_h);
+  if(sleepEntries.length < 5) return '';
+
+  const scores = sleepEntries.map(e => {
+    const d = e.details;
+    let score = 0;
+    // Duration score (0-40): ideal=7.5h
+    const diff = Math.abs((d.duration_h||0) - IDEAL_SLEEP);
+    score += Math.max(0, 40 - diff*10);
+    // Quality score (0-30)
+    if(d.quality) score += (d.quality/5)*30;
+    // No medication bonus (0-15)
+    if(!d.medication) score += 15;
+    // Mouthpiece bonus (0-15)
+    if(d.mouthpiece) score += 15;
+    return Math.min(100, Math.round(score));
+  });
+
+  const avg = Math.round(scores.reduce((s,x)=>s+x,0)/scores.length);
+  const latest = scores[0];
+  const trend = scores.length>=3 ? scores[0] - scores.slice(-3).reduce((s,x)=>s+x,0)/3 : 0;
+  const trendLabel = trend > 5 ? '↑ 改善傾向' : trend < -5 ? '↓ 要注意' : '→ 安定';
+  const trendColor = trend > 5 ? 'var(--green-s)' : trend < -5 ? 'var(--red-s)' : 'var(--chalk3)';
+  const scoreColor = avg>=70?'var(--green-s)':avg>=50?'var(--accent2)':'var(--red-s)';
+
+  return `<div class="chart-card" style="margin-bottom:10px">
+    <div class="chart-head">💤 睡眠スコア（直近30日）</div>
+    <div style="display:flex;align-items:center;gap:20px;padding:8px 0">
+      <div style="text-align:center">
+        <div style="font-family:var(--mono);font-size:36px;font-weight:700;color:${scoreColor}">${avg}</div>
+        <div style="font-size:9px;color:var(--chalk3)">平均スコア / 100</div>
+      </div>
+      <div style="flex:1">
+        <div style="height:10px;background:var(--bg2);border-radius:5px;overflow:hidden;margin-bottom:8px">
+          <div style="height:100%;width:${avg}%;background:${scoreColor};border-radius:5px"></div>
+        </div>
+        <div style="font-size:11px;color:var(--chalk2)">直近: <span style="font-family:var(--mono);font-weight:700">${latest}</span></div>
+        <div style="font-size:10px;color:${trendColor};margin-top:2px">${trendLabel}</div>
+      </div>
+    </div>
+    <div style="font-size:9px;color:var(--chalk4);padding-top:6px;border-top:1px solid var(--border)">
+      算出：睡眠時間40点 + 質30点 + 眠剤なし15点 + MP使用15点
+    </div>
+  </div>`;
+}
+
+// ════════════════════════
+// 📅 曜日別パターン分析
+// ════════════════════════
+function buildWeekdayRadar(){
+  const all = getAll();
+  if(all.length < 14) return '';
+
+  const DOW = ['日','月','火','水','木','金','土'];
+  const byDow = Array.from({length:7}, ()=>({sleep:[],meals:0,days:0}));
+
+  all.forEach(day => {
+    const d = new Date(day.date.replace(/\./g,'-'));
+    const dow = d.getDay();
+    byDow[dow].days++;
+    const se = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+    if(se) byDow[dow].sleep.push(se.details.duration_h);
+    byDow[dow].meals += day.entries?.filter(e=>e.category==='meal').length||0;
+  });
+
+  const avgSleep = byDow.map(x=>x.sleep.length?+(x.sleep.reduce((s,v)=>s+v,0)/x.sleep.length).toFixed(1):0);
+  const avgMeals = byDow.map(x=>x.days?+(x.meals/x.days).toFixed(1):0);
+
+  const maxS = Math.max(...avgSleep, 8);
+
+  const bars = DOW.map((d,i) => {
+    const h = avgSleep[i];
+    const pct = maxS>0?(h/maxS)*100:0;
+    const color = h>=IDEAL_SLEEP?'var(--green-s)':h>=6?'var(--accent2)':'var(--red-s)';
+    return `<div style="flex:1;text-align:center">
+      <div style="font-size:9px;color:var(--chalk3);margin-bottom:4px">${avgMeals[i]}食</div>
+      <div style="height:60px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:4px">
+        <div style="width:20px;background:${color};border-radius:3px 3px 0 0;height:${Math.max(pct,4)}%"></div>
+      </div>
+      <div style="font-size:10px;font-family:var(--mono);font-weight:700;color:${color}">${h||'—'}</div>
+      <div style="font-size:10px;color:var(--chalk3)">${d}</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="chart-card" style="margin-bottom:10px">
+    <div class="chart-head">📅 曜日別パターン（睡眠h・食事回数）</div>
+    <div style="display:flex;gap:2px;padding:8px 0;align-items:flex-end">${bars}</div>
+    <div style="font-size:9px;color:var(--chalk4);text-align:center">棒グラフ=平均睡眠時間　上の数字=平均食事回数</div>
+  </div>`;
+}
+
+// ════════════════════════
+// MONTHLY SUMMARY CARDS
+// ════════════════════════
+function buildMonthlyCards(){
+  const all = getAll();
+  if(!all.length) return '';
+
+  // Group entries by YYYY.MM
+  const months = {};
+  all.forEach(day => {
+    const ym = day.date.slice(0,7); // "2025.02"
+    if(!months[ym]) months[ym] = [];
+    months[ym].push(day);
+  });
+
+  const ymKeys = Object.keys(months).sort().reverse();
+  if(!ymKeys.length) return '';
+
+  const cards = ymKeys.map(ym => {
+    const days = months[ym];
+    const recordedDays = days.length;
+
+    // Sleep stats
+    const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='sleep'&&e.details?.duration_h);
+    const avgSleep = sleepEntries.length ? (sleepEntries.reduce((s,e)=>s+e.details.duration_h,0)/sleepEntries.length).toFixed(1) : null;
+    const medDays = sleepEntries.filter(e=>e.details?.medication).length;
+
+    // Meal stats
+    const mealCount = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal').length;
+
+    // Exercise stats
+    const exCount = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='body').length;
+
+    // Mood avg
+    const moodDays = days.filter(d=>d.mood);
+    const avgMood = moodDays.length ? (moodDays.reduce((s,d)=>s+d.mood,0)/moodDays.length).toFixed(1) : null;
+    const moodEmoji = avgMood ? ['','😞','😕','😐','🙂','😄'][Math.round(avgMood)] : '';
+
+    // Finance
+    const finEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='finance');
+    const totalExp = finEntries.filter(e=>e.details?.transaction_type==='expense').reduce((s,e)=>s+(e.details?.amount||0),0);
+    const totalInc = finEntries.filter(e=>e.details?.transaction_type==='income').reduce((s,e)=>s+(e.details?.amount||0),0);
+
+    // Sleep debt for this month
+    const sleepDebt = sleepEntries.length ? Math.round((sleepEntries.reduce((s,e)=>s+(IDEAL_SLEEP-e.details.duration_h),0))*10)/10 : null;
+
+    // Get calendar month name
+    const [y,m] = ym.split('.');
+    const monthName = `${y}年${parseInt(m)}月`;
+
+    // Stat items
+    const stats = [
+      {l:'記録日数', v:`${recordedDays}日`, c:'var(--accent3)'},
+      avgSleep ? {l:'平均睡眠', v:`${avgSleep}h`, c:'#a0c0e8'} : null,
+      sleepDebt !== null ? {l:'睡眠借金', v:`${sleepDebt>0?'-':'+'} ${Math.abs(sleepDebt)}h`, c:sleepDebt>0?'var(--red-s)':'var(--green-s)'} : null,
+      medDays>0 ? {l:'眠剤使用', v:`${medDays}日`, c:'var(--chalk3)'} : null,
+      {l:'食事記録', v:`${mealCount}回`, c:'#d4a040'},
+      exCount>0 ? {l:'運動', v:`${exCount}回`, c:'var(--green-s)'} : null,
+      avgMood ? {l:'平均気分', v:`${moodEmoji} ${avgMood}`, c:'var(--chalk2)'} : null,
+      totalExp>0 ? {l:'支出合計', v:`¥${totalExp.toLocaleString()}`, c:'var(--red-s)'} : null,
+      totalInc>0 ? {l:'収入合計', v:`¥${totalInc.toLocaleString()}`, c:'var(--green-s)'} : null,
+    ].filter(Boolean);
+
+    return `<div style="background:var(--card);border:1px solid var(--border2);border-radius:var(--r);margin-bottom:10px;overflow:hidden">
+      <div style="padding:12px 16px;background:var(--card2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:13px;font-weight:700;color:var(--accent3)">${monthName}</span>
+        <span style="font-size:10px;color:var(--chalk3);font-family:var(--mono)">${ym}</span>
+      </div>
+      <div style="padding:12px 16px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        ${stats.map(s=>`<div style="background:var(--bg2);border-radius:var(--r2);padding:10px 8px;text-align:center">
+          <div style="font-size:9px;color:var(--chalk3);letter-spacing:.06em;margin-bottom:4px">${s.l}</div>
+          <div style="font-size:13px;font-weight:700;color:${s.c};font-family:var(--mono)">${s.v}</div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div style="margin-top:6px">
+    <div style="font-size:10px;color:var(--chalk3);letter-spacing:.12em;margin-bottom:10px">📅 月別サマリー</div>
+    ${cards}
+  </div>`;
+}
+
+// ════════════════════════
 // REPORT
 // ════════════════════════
 const PERIODS = [{l:'7日',d:7},{l:'30日',d:30},{l:'90日',d:90},{l:'半年',d:180},{l:'1年',d:365},{l:'全期間',d:99999}];
@@ -966,9 +1246,14 @@ function renderReport(c){
   c.innerHTML = `
     <div class="period-tabs">${btns}</div>
     ${slice.length>=2 ? buildCharts(slice) : ''}
+    ${buildSleepConditionTable()}
+    ${buildHabitRates()}
+    ${buildSleepScore()}
+    ${buildWeekdayRadar()}
     <button class="ai-run-btn" onclick="runReport()">✦ AIにレポートを作ってもらう（自動保存）</button>
     <div class="spinner" id="ai-spin"><span class="spin">レポート作成中</span></div>
     <div id="ai-out"></div>
+    ${buildMonthlyCards()}
     ${savedHtml}
   `;
 }
