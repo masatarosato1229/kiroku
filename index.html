@@ -316,6 +316,7 @@ body::after {
 <div class="nav">
   <button class="nav-btn active" onclick="goNav('record')">記録する</button>
   <button class="nav-btn" onclick="goNav('history')">履歴</button>
+  <button class="nav-btn" onclick="goNav('album')">アルバム</button>
   <button class="nav-btn" onclick="goNav('report')">レポート</button>
 </div>
 
@@ -381,13 +382,14 @@ const CAT_DP  = {
 function goNav(n){
   currentNav = n;
   document.querySelectorAll('.nav-btn').forEach((b,i) =>
-    b.classList.toggle('active', ['record','history','report'][i] === n));
+    b.classList.toggle('active', ['record','history','album','report'][i] === n));
   render();
 }
 function render(){
   const c = document.getElementById('content');
   if(currentNav==='record') renderRecord(c);
   else if(currentNav==='history') renderHistory(c);
+  else if(currentNav==='album') renderAlbum(c);
   else if(currentNav==='report') renderReport(c);
 }
 
@@ -450,7 +452,7 @@ let saveDate = todayKey; // can be overridden for past entries
 
 function renderRecord(c){
   liveResults = L('live_'+todayKey, { entries:[], photos:[] });
-  attachedPhotos = {};
+  attachedPhotos = { meal:[], skin:[], receipt:[] };
   saveDate = todayKey;
   c.innerHTML = `
     <!-- Sleep debt banner at top -->
@@ -476,21 +478,37 @@ function renderRecord(c){
         <span class="mic-sub">睡眠・食事・運動・肌・収支など、なんでもまとめて話せます</span>
       </button>
 
-      <div class="photo-row">
-        <div class="photo-slot" id="sl-meal">
-          <input type="file" accept="image/*" capture="environment" onchange="attachPhoto(this,'meal')">
-          <div class="ps-icon">🍱</div><div class="ps-lbl">食事の写真</div>
-          <img id="pv-meal"><button class="ps-rm" onclick="removePhoto(event,'meal')">✕</button>
+      <!-- 写真スロット：各カテゴリ最大3枚、アルバム選択対応 -->
+      <div style="margin-bottom:14px">
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;color:var(--chalk3);margin-bottom:6px">🍱 食事の写真（最大3枚）</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap" id="photo-row-meal">
+            <label style="width:72px;height:72px;border:1.5px dashed var(--border2);border-radius:var(--r2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2);flex-shrink:0">
+              <input type="file" accept="image/*" multiple onchange="attachPhotos(this,'meal')" style="display:none">
+              <span style="font-size:20px">🍱</span>
+              <span style="font-size:8px;color:var(--chalk3);margin-top:2px">追加</span>
+            </label>
+          </div>
         </div>
-        <div class="photo-slot" id="sl-skin">
-          <input type="file" accept="image/*" capture="environment" onchange="attachPhoto(this,'skin')">
-          <div class="ps-icon">✨</div><div class="ps-lbl">肌の写真</div>
-          <img id="pv-skin"><button class="ps-rm" onclick="removePhoto(event,'skin')">✕</button>
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;color:var(--chalk3);margin-bottom:6px">✨ 肌の写真（最大3枚）</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap" id="photo-row-skin">
+            <label style="width:72px;height:72px;border:1.5px dashed var(--border2);border-radius:var(--r2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2);flex-shrink:0">
+              <input type="file" accept="image/*" multiple onchange="attachPhotos(this,'skin')" style="display:none">
+              <span style="font-size:20px">✨</span>
+              <span style="font-size:8px;color:var(--chalk3);margin-top:2px">追加</span>
+            </label>
+          </div>
         </div>
-        <div class="photo-slot" id="sl-receipt">
-          <input type="file" accept="image/*" capture="environment" onchange="attachPhoto(this,'receipt')">
-          <div class="ps-icon">🧾</div><div class="ps-lbl">レシート</div>
-          <img id="pv-receipt"><button class="ps-rm" onclick="removePhoto(event,'receipt')">✕</button>
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;color:var(--chalk3);margin-bottom:6px">🧾 レシートの写真（最大3枚）</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap" id="photo-row-receipt">
+            <label style="width:72px;height:72px;border:1.5px dashed var(--border2);border-radius:var(--r2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2);flex-shrink:0">
+              <input type="file" accept="image/*" multiple onchange="attachPhotos(this,'receipt')" style="display:none">
+              <span style="font-size:20px">🧾</span>
+              <span style="font-size:8px;color:var(--chalk3);margin-top:2px">追加</span>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -603,33 +621,54 @@ function clearInput(){
 }
 
 // ════════════════════════
-// PHOTO ATTACH
+// PHOTO ATTACH (multi, album)
 // ════════════════════════
-function attachPhoto(input, key){
-  const file = input.files[0]; if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ev => {
-    attachedPhotos[key] = ev.target.result;
-    const prev = document.getElementById('pv-'+key);
-    const slot = document.getElementById('sl-'+key);
-    if(prev){ prev.src = ev.target.result; prev.style.display='block'; }
-    slot?.querySelector('.ps-icon')?.setAttribute('style','display:none');
-    slot?.querySelector('.ps-lbl')?.setAttribute('style','display:none');
-    slot?.classList.add('has');
-    document.getElementById('ta-wrap')?.classList.add('show');
-  };
-  reader.readAsDataURL(file);
+// attachedPhotos: { meal: [b64, b64, ...], skin: [...], receipt: [...] }
+function attachPhotos(input, type){
+  const files = Array.from(input.files);
+  if(!files.length) return;
+  if(!attachedPhotos[type]) attachedPhotos[type] = [];
+  files.forEach(file => {
+    if(attachedPhotos[type].length >= 3){ showToast('1カテゴリ最大3枚まで'); return; }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      attachedPhotos[type].push(ev.target.result);
+      renderPhotoRow(type);
+      document.getElementById('ta-wrap')?.classList.add('show');
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
+function removePhotoAt(type, idx){
+  if(!attachedPhotos[type]) return;
+  attachedPhotos[type].splice(idx, 1);
+  renderPhotoRow(type);
+}
+
+function renderPhotoRow(type){
+  const icons = {meal:'🍱',skin:'✨',receipt:'🧾'};
+  const row = document.getElementById('photo-row-'+type);
+  if(!row) return;
+  const photos = attachedPhotos[type] || [];
+  // Keep the add button, replace thumbnails
+  const addBtn = row.querySelector('label');
+  row.innerHTML = '';
+  photos.forEach((b64, i) => {
+    const div = document.createElement('div');
+    div.style.cssText = 'position:relative;width:72px;height:72px;flex-shrink:0';
+    div.innerHTML = `<img src="${b64}" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1.5px solid var(--border2)">
+      <button onclick="removePhotoAt('${type}',${i})" style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.7);border:none;color:#fff;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>`;
+    row.appendChild(div);
+  });
+  if(photos.length < 3) row.appendChild(addBtn);
+}
+
+// Legacy single-photo remove (keep for compatibility)
 function removePhoto(e, key){
   e.stopPropagation();
-  delete attachedPhotos[key];
-  const prev = document.getElementById('pv-'+key);
-  const slot = document.getElementById('sl-'+key);
-  if(prev){ prev.src=''; prev.style.display='none'; }
-  slot?.querySelector('.ps-icon')?.removeAttribute('style');
-  slot?.querySelector('.ps-lbl')?.removeAttribute('style');
-  slot?.classList.remove('has');
+  attachedPhotos[key] = [];
+  renderPhotoRow(key);
 }
 
 // ════════════════════════
@@ -652,7 +691,7 @@ function detectDateFromText(text){
 
 async function submitAll(){
   const text = (document.getElementById('ta')?.value || '').trim();
-  const hasPhotos = Object.keys(attachedPhotos).length > 0;
+  const hasPhotos = Object.values(attachedPhotos).some(arr => Array.isArray(arr) ? arr.length>0 : !!arr);
   if(!text && !hasPhotos){ showToast('テキストか写真が必要です'); return; }
 
   // Auto-detect date from text
@@ -677,28 +716,24 @@ async function submitAll(){
 
   const tasks = [];
   if(text) tasks.push(parseText(text));
-  if(attachedPhotos.meal) tasks.push(analyzePhoto('meal', attachedPhotos.meal));
-  if(attachedPhotos.skin) tasks.push(analyzePhoto('skin', attachedPhotos.skin));
-  if(attachedPhotos.receipt) tasks.push(analyzePhoto('receipt', attachedPhotos.receipt));
+  // Handle multi-photos per type
+  ['meal','skin','receipt'].forEach(type => {
+    const photos = Array.isArray(attachedPhotos[type]) ? attachedPhotos[type] : (attachedPhotos[type] ? [attachedPhotos[type]] : []);
+    photos.forEach(b64 => tasks.push(analyzePhoto(type, b64)));
+  });
 
   await Promise.allSettled(tasks);
 
   S('live_'+todayKey, liveResults);
   S('pending_'+todayKey, liveResults.entries);
 
-  ['meal','skin','receipt'].forEach(k => {
-    delete attachedPhotos[k];
-    const pv = document.getElementById('pv-'+k);
-    const sl = document.getElementById('sl-'+k);
-    if(pv){ pv.src=''; pv.style.display='none'; }
-    sl?.querySelector('.ps-icon')?.removeAttribute('style');
-    sl?.querySelector('.ps-lbl')?.removeAttribute('style');
-    sl?.classList.remove('has');
-  });
+  // Reset photos
+  attachedPhotos = { meal:[], skin:[], receipt:[] };
+  ['meal','skin','receipt'].forEach(type => renderPhotoRow(type));
   clearInput();
   refreshLive();
   if(btn){ btn.disabled=false; btn.textContent='✦ AIに解析してもらう'; }
-  showToast(`記録しました ✓`);
+  showToast('解析しました ✓');
 }
 
 // Direct save without AI — just store raw text as "other" entry
@@ -775,7 +810,7 @@ async function analyzePhoto(type, b64){
       }catch(e){ liveResults.photos.push({ type:'receipt', text:raw }); }
     } else {
       liveResults.photos.push({ type, text:raw });
-      liveResults.entries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:raw }, ts:Date.now() });
+      liveResults.entries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:raw, photo_b64:b64 }, ts:Date.now() });
     }
   }catch(e){ console.error('analyzePhoto',e); }
 }
@@ -830,6 +865,49 @@ function saveToday(){
 }
 
 // ════════════════════════
+// ALBUM
+// ════════════════════════
+function renderAlbum(c){
+  const all = getAll();
+  // Collect all photo entries with dates
+  const photos = [];
+  all.forEach(day => {
+    (day.entries||[]).forEach(e => {
+      if((e.category==='meal'||e.category==='skin')&&e.details?.photo_b64){
+        photos.push({ date:day.date, type:e.category, b64:e.details.photo_b64, analysis:e.details?.ai_result||'' });
+      }
+    });
+  });
+
+  const mealPhotos = photos.filter(p=>p.type==='meal');
+  const skinPhotos = photos.filter(p=>p.type==='skin');
+
+  const makeGrid = (arr, label) => {
+    if(!arr.length) return `<div style="padding:20px;text-align:center;color:var(--chalk4);font-size:12px">${label}の写真はまだありません</div>`;
+    return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
+      ${arr.map(p=>`<div style="position:relative;aspect-ratio:1;cursor:pointer" onclick="showPhotoDetail('${p.date}','${p.type}')">
+        <img src="${p.b64}" style="width:100%;height:100%;object-fit:cover;border-radius:6px">
+        <div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.6));padding:4px 5px;border-radius:0 0 6px 6px">
+          <div style="font-size:8px;color:#fff;font-family:var(--mono)">${p.date.slice(5)}</div>
+        </div>
+      </div>`).join('')}
+    </div>`;
+  };
+
+  c.innerHTML = `
+    <div style="padding:0 0 14px">
+      <div style="font-size:10px;color:var(--chalk3);letter-spacing:.1em;margin-bottom:8px">🍱 食事アルバム（${mealPhotos.length}枚）</div>
+      ${makeGrid(mealPhotos,'食事')}
+    </div>
+    <div style="padding:0 0 14px">
+      <div style="font-size:10px;color:var(--chalk3);letter-spacing:.1em;margin-bottom:8px">✨ 肌アルバム（${skinPhotos.length}枚）</div>
+      ${makeGrid(skinPhotos,'肌')}
+    </div>
+    ${!photos.length ? '<div class="empty">写真付きで記録すると<br>ここにアルバムが作られます</div>' : ''}
+  `;
+}
+
+// ════════════════════════
 // HISTORY
 // ════════════════════════
 function renderHistory(c){
@@ -871,6 +949,7 @@ function renderHistory(c){
           </div>
           <div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">
             ${e.category==='other'&&e.details?.raw ? `<button onclick="reanalyzeEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font);white-space:nowrap">再解析</button>` : ''}
+            <button onclick="editEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--blue-s);color:var(--blue-s);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">編集</button>
             <button onclick="deleteEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">削除</button>
           </div>
         </div>`).join('')}
@@ -891,7 +970,21 @@ function deleteDay(date){
   showToast('削除しました ✓');
 }
 
-function deleteEntry(date, ei){
+function editEntry(date, ei){
+  const all = getAll();
+  const day = all.find(e=>e.date===date);
+  if(!day) return;
+  const entry = day.entries[ei];
+  const current = entry.summary;
+  const newSummary = prompt(`内容を編集してください：`, current);
+  if(newSummary === null) return;
+  entry.summary = newSummary.trim() || current;
+  // Also update raw if exists
+  if(entry.details?.raw) entry.details.raw = entry.summary;
+  S('kiroku_entries', all);
+  renderHistory(document.getElementById('content'));
+  showToast('編集しました ✓');
+}
   if(!confirm('この項目を削除しますか？')) return;
   const all = getAll();
   const day = all.find(e=>e.date===date);
