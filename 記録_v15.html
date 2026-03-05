@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="記録">
+<title>記録</title>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #1e2420;
+  --bg2:     #252d28;
+  --card:    #2b342e;
+  --card2:   #323d36;
+  --border:  #3d4d42;
+  --border2: #4e6054;
+
+  --chalk:   #e8f0e9;
+  --chalk2:  #b0c4b4;
+  --chalk3:  #6e8872;
+  --chalk4:  #3e5442;
+
+  --accent:  #d4b896;
+  --accent2: #c4a070;
+  --accent3: #f0d0a8;
+
+  --red-s:   #c87060;
+  --green-s: #70a880;
+  --blue-s:  #7090b8;
+
+  --font:    'Zen Maru Gothic', sans-serif;
+  --mono:    'DM Mono', monospace;
+  --r:       18px;
+  --r2:      14px;
+  --r3:      28px;
+}
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html, body { height:100%; background:var(--bg); color:var(--chalk); font-family:var(--font); font-weight:400; }
+
+/* Chalkboard texture */
+body::before {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:0; opacity:.06;
+  background-image:
+    repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(255,255,255,.04) 4px),
+    repeating-linear-gradient(90deg, transparent, transparent 3px, rgba(255,255,255,.02) 4px);
+}
+body::after {
+  content:''; position:fixed; inset:0; pointer-events:none; z-index:9999; opacity:.03;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.app { position:relative; z-index:1; display:flex; flex-direction:column; height:100dvh; }
+
+/* ── TOPBAR ── */
+.topbar {
+  flex-shrink:0; padding:14px 18px 12px;
+  background:var(--bg2); border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+}
+.topbar-title { font-size:20px; font-weight:700; color:var(--accent3); letter-spacing:.08em; }
+.topbar-right { display:flex; align-items:center; gap:10px; }
+.topbar-date { font-family:var(--mono); font-size:10px; color:var(--chalk3); }
+.backup-btn {
+  padding:6px 14px; background:transparent; border:1px solid var(--border2);
+  color:var(--chalk3); font-size:10px; cursor:pointer; letter-spacing:.06em;
+  font-family:var(--font); font-weight:500; border-radius:20px; transition:all .2s;
+}
+.backup-btn:hover { color:var(--accent3); border-color:var(--accent2); }
+
+/* ── NAV ── */
+.nav {
+  flex-shrink:0; display:flex; background:var(--bg2);
+  border-bottom:2px solid var(--border); overflow-x:auto;
+  scrollbar-width:none; padding:0 10px; gap:4px;
+}
+.nav::-webkit-scrollbar { display:none; }
+.nav-btn {
+  flex:0 0 auto; padding:11px 20px; background:none; border:none; cursor:pointer;
+  font-family:var(--font); font-size:12px; font-weight:500; letter-spacing:.06em;
+  color:var(--chalk3); border-bottom:3px solid transparent; transition:all .2s;
+  white-space:nowrap; margin-bottom:-2px;
+}
+.nav-btn.active { color:var(--accent3); border-bottom-color:var(--accent2); }
+
+/* ── CONTENT ── */
+.content { flex:1; overflow-y:auto; padding:16px; scrollbar-width:thin; scrollbar-color:var(--border2) transparent; }
+
+/* ══ INPUT PANEL ══ */
+.input-panel {
+  background:var(--card); border:1px solid var(--border2);
+  border-radius:var(--r3); padding:20px; margin-bottom:16px;
+}
+.panel-eyebrow {
+  font-size:10px; color:var(--chalk3); letter-spacing:.14em; text-transform:uppercase;
+  margin-bottom:14px; display:flex; align-items:center; gap:8px;
+}
+.panel-eyebrow::before { content:''; display:block; width:20px; height:1px; background:var(--chalk3); }
+
+/* Big mic */
+.big-mic {
+  width:100%; padding:24px 18px;
+  background:var(--card2); border:2px solid var(--border2);
+  border-radius:var(--r); cursor:pointer;
+  display:flex; flex-direction:column; align-items:center; gap:10px;
+  transition:all .25s; font-family:var(--font); position:relative; overflow:hidden;
+}
+.big-mic:hover { border-color:var(--accent2); background:var(--bg2); }
+.big-mic.rec { border-color:var(--red-s); background:var(--bg2); animation:rec-pulse 1.6s ease-in-out infinite; }
+@keyframes rec-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(200,112,96,.0)} 50%{box-shadow:0 0 0 12px rgba(200,112,96,.12)} }
+.mic-orb {
+  width:64px; height:64px; border-radius:50%;
+  background:var(--bg2); border:2px solid var(--border2);
+  display:flex; align-items:center; justify-content:center;
+  font-size:28px; transition:all .25s;
+}
+.big-mic:hover .mic-orb { border-color:var(--accent2); }
+.big-mic.rec .mic-orb { border-color:var(--red-s); animation:orb-beat .9s ease-in-out infinite; }
+@keyframes orb-beat { 0%,100%{transform:scale(1)} 50%{transform:scale(1.1)} }
+.mic-main { font-size:16px; font-weight:700; color:var(--chalk); letter-spacing:.1em; }
+.mic-sub { font-size:11px; color:var(--chalk3); text-align:center; line-height:1.7; max-width:300px; }
+
+/* Photo slots */
+.photo-row { display:flex; gap:8px; margin-top:12px; }
+.photo-slot {
+  flex:1; background:var(--bg2); border:1px dashed var(--border2);
+  border-radius:var(--r2); padding:12px 6px; text-align:center;
+  cursor:pointer; position:relative; transition:all .2s;
+  min-height:72px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:4px;
+}
+.photo-slot:hover { border-color:var(--accent2); }
+.photo-slot.has { border-style:solid; border-color:var(--green-s); }
+.photo-slot input[type=file] { position:absolute; inset:0; opacity:0; cursor:pointer; }
+.ps-icon { font-size:20px; }
+.ps-lbl { font-size:9px; color:var(--chalk3); letter-spacing:.04em; }
+.photo-slot img { max-width:100%; max-height:52px; object-fit:cover; border-radius:8px; display:none; }
+.ps-rm {
+  position:absolute; top:4px; right:4px; background:var(--card2);
+  border:1px solid var(--border2); color:var(--chalk3); width:18px; height:18px;
+  border-radius:50%; cursor:pointer; font-size:9px; display:none;
+  align-items:center; justify-content:center; z-index:2; font-family:var(--font);
+}
+.photo-slot.has .ps-rm { display:flex; }
+
+/* Transcript */
+.ta-wrap { margin-top:12px; display:none; }
+.ta-wrap.show { display:block; }
+.ta {
+  width:100%; min-height:64px; background:var(--bg2); border:1px solid var(--border2);
+  border-radius:var(--r2); color:var(--chalk); font-family:var(--font);
+  font-size:13px; line-height:1.9; padding:11px 14px; resize:none; outline:none;
+  font-weight:400;
+}
+.ta::placeholder { color:var(--chalk4); }
+.ta:focus { border-color:var(--accent2); }
+.action-row { display:flex; gap:8px; margin-top:10px; }
+.submit-btn {
+  flex:1; padding:14px;
+  background:var(--accent2); color:var(--bg);
+  border:none; border-radius:var(--r2); cursor:pointer;
+  font-family:var(--font); font-size:13px; font-weight:700;
+  letter-spacing:.1em; transition:all .2s;
+}
+.submit-btn:hover { background:var(--accent3); }
+.submit-btn:disabled { opacity:.4; cursor:default; }
+.clr-btn {
+  padding:14px 16px; background:transparent; border:1px solid var(--border2);
+  color:var(--chalk3); cursor:pointer; border-radius:var(--r2);
+  font-size:12px; font-family:var(--font); transition:all .15s;
+}
+.clr-btn:hover { border-color:var(--chalk3); color:var(--chalk); }
+
+/* ── LIVE RESULTS ── */
+.live-panel {
+  background:var(--card); border:1px solid var(--border2);
+  border-radius:var(--r3); overflow:hidden; margin-bottom:16px;
+}
+.live-head {
+  padding:12px 18px; background:var(--card2);
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+}
+.live-head-title { font-size:11px; font-weight:700; color:var(--accent3); letter-spacing:.12em; }
+.live-head-clr { background:none; border:none; color:var(--chalk3); cursor:pointer; font-size:10px; font-family:var(--font); }
+.live-body { padding:14px 18px; }
+
+.result-entry {
+  display:flex; align-items:flex-start; gap:10px; padding:9px 12px;
+  background:var(--bg2); border-radius:var(--r2); margin-bottom:7px;
+}
+.result-entry:last-child { margin-bottom:0; }
+.cat-pill {
+  flex-shrink:0; font-size:9px; font-weight:700; padding:3px 10px;
+  border-radius:20px; white-space:nowrap; margin-top:2px; letter-spacing:.04em;
+}
+.cp-sleep  { background:rgba(112,144,184,.2); color:#a0c0e8; }
+.cp-meal   { background:rgba(212,184,150,.2); color:var(--accent3); }
+.cp-skin   { background:rgba(200,112,96,.2);  color:#e8a098; }
+.cp-body   { background:rgba(112,168,128,.2); color:#90c8a0; }
+.cp-finance{ background:rgba(184,160,96,.2);  color:#e0c880; }
+.cp-other  { background:rgba(255,255,255,.06);color:var(--chalk2); }
+.result-text { flex:1; font-size:12px; color:var(--chalk2); line-height:1.7; }
+.result-del { background:none; border:none; color:var(--chalk4); cursor:pointer; font-size:11px; padding:0 2px; flex-shrink:0; margin-top:2px; font-family:var(--font); }
+
+.photo-result {
+  background:var(--bg2); border-radius:var(--r2); padding:12px 14px;
+  margin-bottom:7px; font-size:12px; line-height:1.9; color:var(--chalk2);
+}
+.photo-result strong { color:var(--chalk); font-weight:700; font-size:11px; letter-spacing:.06em; }
+.photo-result .prdel { display:block; margin-top:6px; background:none; border:none; color:var(--chalk4); font-size:10px; cursor:pointer; font-family:var(--font); padding:0; }
+
+.analyzing {
+  display:flex; align-items:center; gap:8px; padding:10px 12px;
+  background:var(--bg2); border-radius:var(--r2); color:var(--chalk3); font-size:11px;
+}
+.analyzing .dot { width:8px; height:8px; border-radius:50%; background:var(--accent2); animation:blink .8s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:.3} 50%{opacity:1} }
+
+/* Save button */
+.save-btn {
+  width:100%; padding:17px;
+  background:var(--card2); border:2px solid var(--accent2);
+  color:var(--accent3); cursor:pointer; font-family:var(--font); font-weight:700;
+  font-size:14px; letter-spacing:.2em; border-radius:var(--r); transition:all .25s;
+  margin-bottom:24px;
+}
+.save-btn:hover, .save-btn:active { background:var(--accent2); color:var(--bg); }
+
+/* ── HISTORY ── */
+.day-card {
+  background:var(--card); border:1px solid var(--border);
+  border-radius:var(--r); margin-bottom:10px; overflow:hidden;
+}
+.day-head {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:13px 16px; cursor:pointer; user-select:none;
+}
+.day-date { font-family:var(--mono); font-size:11px; color:var(--chalk2); }
+.day-pills { display:flex; flex-wrap:wrap; gap:4px; }
+.dp { font-size:9px; padding:3px 9px; border-radius:20px; font-family:var(--mono); }
+.day-body { padding:12px 16px; border-top:1px solid var(--border); display:none; }
+.day-card.open .day-body { display:block; }
+.de { display:flex; align-items:flex-start; gap:8px; margin-bottom:8px; }
+.de:last-child { margin-bottom:0; }
+.de-txt { font-size:12px; color:var(--chalk2); line-height:1.7; }
+
+/* ── REPORT ── */
+.period-tabs { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+.period-btn {
+  flex:0 0 auto; padding:8px 16px; background:var(--card); border:1px solid var(--border2);
+  color:var(--chalk3); cursor:pointer; font-size:11px; letter-spacing:.06em;
+  font-family:var(--font); font-weight:500; border-radius:20px; transition:all .2s;
+}
+.period-btn.active { border-color:var(--accent2); color:var(--accent3); background:var(--card2); }
+
+.chart-card { background:var(--card); border:1px solid var(--border); border-radius:var(--r); margin-bottom:14px; overflow:hidden; }
+.chart-head { padding:11px 16px; border-bottom:1px solid var(--border); font-size:10px; color:var(--chalk3); letter-spacing:.12em; }
+.chart-body { padding:16px; }
+.bg { margin-bottom:18px; }
+.bg:last-child { margin-bottom:0; }
+.bgl { font-size:10px; color:var(--chalk3); margin-bottom:7px; letter-spacing:.06em; }
+.bars { display:flex; align-items:flex-end; gap:3px; height:52px; }
+.bc { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; }
+.bf { width:100%; border-radius:6px 6px 0 0; min-height:3px; transition:height .4s ease; background:var(--border2); }
+.bf.hi { background:var(--accent2); }
+.bdt { font-family:var(--mono); font-size:7px; color:var(--chalk4); }
+
+.ai-run-btn {
+  width:100%; padding:16px; background:var(--card2); border:2px solid var(--border2);
+  color:var(--chalk2); cursor:pointer; font-family:var(--font); font-weight:700;
+  font-size:13px; letter-spacing:.14em; border-radius:var(--r); transition:all .25s; margin-bottom:12px;
+}
+.ai-run-btn:hover { border-color:var(--accent2); color:var(--accent3); }
+
+.ai-box {
+  background:var(--card); border:1px solid var(--border2); border-radius:var(--r);
+  padding:20px; margin-bottom:10px; border-left:3px solid var(--accent2);
+}
+.ai-box h3 { font-size:16px; font-weight:700; color:var(--accent3); margin-bottom:14px; letter-spacing:.06em; }
+.ai-box p { font-size:13px; line-height:2.1; color:var(--chalk2); }
+
+.spinner { display:none; text-align:center; padding:24px; font-size:11px; color:var(--chalk3); letter-spacing:.1em; }
+.spinner.show { display:block; }
+.spin::after { content:''; animation:dots 1.4s infinite; }
+@keyframes dots { 0%{content:''}33%{content:'.'}66%{content:'..'}100%{content:'...'} }
+
+/* ── TOAST ── */
+.toast {
+  position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(12px);
+  background:var(--card2); border:1px solid var(--border2); color:var(--chalk2);
+  padding:10px 22px; font-size:11px; letter-spacing:.06em;
+  opacity:0; transition:all .3s; z-index:600; pointer-events:none;
+  white-space:nowrap; border-radius:20px; font-family:var(--font);
+}
+.toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+.empty { text-align:center; padding:52px 20px; font-size:13px; color:var(--chalk3); line-height:2.6; }
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="topbar">
+  <div class="topbar-title">記録</div>
+  <div class="topbar-right">
+    <div class="topbar-date" id="top-date"></div>
+    <label class="backup-btn" style="cursor:pointer">
+      📥 復元
+      <input type="file" accept=".json" onchange="restoreBackup(this)" style="display:none">
+    </label>
+    <button class="backup-btn" onclick="doBackup()">💾 保存</button>
+  </div>
+</div>
+
+<div class="nav">
+  <button class="nav-btn active" onclick="goNav('record')">記録する</button>
+  <button class="nav-btn" onclick="goNav('history')">履歴</button>
+  <button class="nav-btn" onclick="goNav('report')">レポート</button>
+</div>
+
+<div class="content" id="content"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ════════════════════════
+// INIT
+// ════════════════════════
+const TODAY = new Date();
+const fmt = d => `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+const todayKey = fmt(TODAY);
+document.getElementById('top-date').textContent = todayKey + ' ' + '日月火水木金土'[TODAY.getDay()];
+
+const L = (k,d) => { try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; }};
+const S = (k,v) => localStorage.setItem(k, JSON.stringify(v));
+const getAll = () => L('kiroku_entries', []);
+
+// ════════════════════════
+// 自動データ移行
+// 旧バージョンのデータを起動時に自動で取り込む
+// ════════════════════════
+function migrateOldData(){
+  const oldKeys = ['rec7_entries','rec6_entries','daily_entries','rec_entries'];
+  let current = L('kiroku_entries', []);
+  let added = 0;
+  oldKeys.forEach(key => {
+    const old = L(key, []);
+    if(!old.length) return;
+    old.forEach(day => {
+      if(day && day.date && !current.find(e => e.date === day.date)){
+        current.push(day); added++;
+      }
+    });
+  });
+  if(added > 0){
+    current.sort((a,b) => b.date.localeCompare(a.date));
+    S('kiroku_entries', current);
+  }
+}
+migrateOldData();
+let analysisPeriod = 7;
+let recog = null, isRec = false;
+let attachedPhotos = {};
+let liveResults = { entries:[], photos:[] };
+
+const CAT_LBL = { sleep:'睡眠', meal:'食事', skin:'肌', body:'運動', finance:'収支', other:'その他' };
+const CAT_CLS = { sleep:'cp-sleep', meal:'cp-meal', skin:'cp-skin', body:'cp-body', finance:'cp-finance', other:'cp-other' };
+const CAT_DP  = {
+  sleep:  'background:rgba(112,144,184,.25);color:#a0c0e8',
+  meal:   'background:rgba(212,184,150,.2);color:#f0d0a8',
+  skin:   'background:rgba(200,112,96,.2);color:#e8a098',
+  body:   'background:rgba(112,168,128,.2);color:#90c8a0',
+  finance:'background:rgba(184,160,96,.2);color:#e0c880',
+  other:  'background:rgba(255,255,255,.07);color:#b0c4b4'
+};
+
+// ════════════════════════
+// NAV
+// ════════════════════════
+function goNav(n){
+  currentNav = n;
+  document.querySelectorAll('.nav-btn').forEach((b,i) =>
+    b.classList.toggle('active', ['record','history','report'][i] === n));
+  render();
+}
+function render(){
+  const c = document.getElementById('content');
+  if(currentNav==='record') renderRecord(c);
+  else if(currentNav==='history') renderHistory(c);
+  else if(currentNav==='report') renderReport(c);
+}
+
+// ════════════════════════
+// STREAK & SLEEP DEBT
+// (defined here so renderRecord can call them)
+// ════════════════════════
+function calcStreak(){
+  const all = getAll();
+  if(!all.length) return 0;
+  let streak = 0;
+  const d = new Date(TODAY);
+  while(true){
+    const key = fmt(d);
+    if(all.find(e=>e.date===key)) streak++;
+    else break;
+    d.setDate(d.getDate()-1);
+  }
+  return streak;
+}
+
+const IDEAL_SLEEP = 7.5;
+
+function calcSleepDebt(days = 14){
+  const all = getAll();
+  let debt = 0, counted = 0;
+  for(let i = 0; i < days; i++){
+    const d = new Date(TODAY); d.setDate(d.getDate() - i);
+    const day = all.find(e => e.date === fmt(d));
+    if(!day) continue;
+    const sleepE = day.entries?.find(e => e.category==='sleep' && e.details?.duration_h);
+    if(sleepE){ debt += IDEAL_SLEEP - (sleepE.details.duration_h || 0); counted++; }
+  }
+  return { debt: Math.round(debt * 10) / 10, days: counted };
+}
+
+function buildSleepDebtBanner(){
+  const { debt, days } = calcSleepDebt(14);
+  if(days === 0) return '';
+  const isDebt = debt > 0;
+  const absDebt = Math.abs(debt);
+  const color = isDebt ? (debt > 5 ? 'var(--red-s)' : 'var(--accent2)') : 'var(--green-s)';
+  const icon = isDebt ? (debt > 5 ? '😪' : '💤') : '✨';
+  const label = isDebt ? `${absDebt}時間の睡眠借金` : `${absDebt}時間のプラス貯金`;
+  const sub = isDebt ? `理想${IDEAL_SLEEP}hに対して直近${days}日間で${absDebt}h不足` : `直近${days}日間、理想以上に眠れています`;
+  return `<div style="display:flex;align-items:center;gap:12px;padding:13px 16px;background:var(--card);border:1px solid ${color}33;border-left:3px solid ${color};border-radius:var(--r);margin-bottom:14px">
+    <span style="font-size:26px">${icon}</span>
+    <div style="flex:1">
+      <div style="font-size:13px;font-weight:700;color:${color}">${label}</div>
+      <div style="font-size:10px;color:var(--chalk3);margin-top:2px">${sub}</div>
+    </div>
+    <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${color}">${isDebt?'-':'+'} ${absDebt}h</div>
+  </div>`;
+}
+
+// ════════════════════════
+// RECORD
+// ════════════════════════
+let saveDate = todayKey; // can be overridden for past entries
+
+function renderRecord(c){
+  liveResults = L('live_'+todayKey, { entries:[], photos:[] });
+  attachedPhotos = {};
+  saveDate = todayKey;
+  c.innerHTML = `
+    <!-- Sleep debt banner at top -->
+    ${buildSleepDebtBanner()}
+
+    <div class="input-panel">
+      <div class="panel-eyebrow">今日の記録</div>
+
+      <!-- Date selector -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);padding:10px 14px">
+        <span style="font-size:11px;color:var(--chalk3);white-space:nowrap">保存する日付</span>
+        <input type="date" id="save-date-input"
+          value="${todayKey.replace(/\./g,'-')}"
+          max="${todayKey.replace(/\./g,'-')}"
+          onchange="updateSaveDate(this.value)"
+          style="flex:1;background:transparent;border:none;outline:none;color:var(--chalk);font-family:var(--mono);font-size:12px;cursor:pointer">
+        <span id="save-date-badge" style="font-size:10px;color:var(--chalk3)">今日</span>
+      </div>
+
+      <button class="big-mic" id="big-mic" onclick="toggleVoice()">
+        <div class="mic-orb">🎙</div>
+        <span class="mic-main">タップして話す</span>
+        <span class="mic-sub">睡眠・食事・運動・肌・収支など、なんでもまとめて話せます</span>
+      </button>
+
+      <div class="photo-row">
+        <div class="photo-slot" id="sl-meal">
+          <input type="file" accept="image/*" capture="environment" onchange="attachPhoto(this,'meal')">
+          <div class="ps-icon">🍱</div><div class="ps-lbl">食事の写真</div>
+          <img id="pv-meal"><button class="ps-rm" onclick="removePhoto(event,'meal')">✕</button>
+        </div>
+        <div class="photo-slot" id="sl-skin">
+          <input type="file" accept="image/*" capture="environment" onchange="attachPhoto(this,'skin')">
+          <div class="ps-icon">✨</div><div class="ps-lbl">肌の写真</div>
+          <img id="pv-skin"><button class="ps-rm" onclick="removePhoto(event,'skin')">✕</button>
+        </div>
+        <div class="photo-slot" id="sl-receipt">
+          <input type="file" accept="image/*" capture="environment" onchange="attachPhoto(this,'receipt')">
+          <div class="ps-icon">🧾</div><div class="ps-lbl">レシート</div>
+          <img id="pv-receipt"><button class="ps-rm" onclick="removePhoto(event,'receipt')">✕</button>
+        </div>
+      </div>
+
+      <div class="ta-wrap show" id="ta-wrap">
+        <textarea class="ta" id="ta" placeholder="ここに話した内容が入ります。直接テキストを入力・貼り付けもできます。&#10;例：睡眠記録、入眠3時、起床9時、眠剤あり。食事1食目パン、ヨーグルト。"></textarea>
+        <div class="action-row">
+          <button class="submit-btn" id="submit-btn" onclick="submitAll()">✦ AIに解析してもらう</button>
+          <button class="clr-btn" onclick="saveDirectly()" style="border-color:var(--chalk3);color:var(--chalk2);white-space:nowrap">そのまま保存</button>
+          <button class="clr-btn" onclick="clearInput()">クリア</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="live-panel">${buildLive()}</div>
+
+    <!-- Mood picker -->
+    <div style="background:var(--card);border:1px solid var(--border2);border-radius:var(--r);padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:10px;color:var(--chalk3);letter-spacing:.1em;margin-bottom:10px">今日の気分</div>
+      <div style="display:flex;justify-content:space-around">
+        ${[['1','😞'],['2','😕'],['3','😐'],['4','🙂'],['5','😄']].map(([v,e])=>`
+          <button onclick="setMood(${v})" id="mood-btn-${v}"
+            style="width:48px;height:48px;border-radius:50%;border:2px solid var(--border2);background:var(--bg2);
+            font-size:24px;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center">
+            ${e}
+          </button>`).join('')}
+      </div>
+    </div>
+
+    <button class="save-btn" id="save-btn" onclick="saveToday()">今日の記録を保存する</button>
+  `;
+  // Restore mood selection if already set today
+  const todayMood = getAll().find(e=>e.date===todayKey)?.mood;
+  if(todayMood) highlightMood(todayMood);
+}
+
+function updateSaveDate(val){
+  // val is YYYY-MM-DD from input[type=date]
+  saveDate = val.replace(/-/g,'.');
+  const badge = document.getElementById('save-date-badge');
+  const saveBtn = document.getElementById('save-btn');
+  if(saveDate === todayKey){
+    if(badge) badge.textContent = '今日';
+    if(saveBtn) saveBtn.textContent = '今日の記録を保存する';
+  } else {
+    if(badge) badge.textContent = '過去の日付';
+    if(saveBtn) saveBtn.textContent = `${saveDate} の記録を保存する`;
+  }
+}
+
+function buildLive(){
+  const lr = liveResults;
+  if(!lr.entries.length && !lr.photos.length) return '';
+  const total = lr.entries.length + lr.photos.length;
+  const entryHtml = lr.entries.map((e,i) => `
+    <div class="result-entry">
+      <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
+      <span class="result-text">${e.summary}</span>
+      <button class="result-del" onclick="delEntry(${i})">✕</button>
+    </div>`).join('');
+  const photoHtml = lr.photos.map((p,i) => `
+    <div class="photo-result">
+      <strong>${{meal:'🍱 食事分析', skin:'✨ 肌の分析', receipt:'🧾 レシート読み取り'}[p.type]||p.type}</strong><br>
+      ${p.text}
+      <button class="prdel" onclick="delPhoto(${i})">削除 ✕</button>
+    </div>`).join('');
+  return `<div class="live-panel">
+    <div class="live-head">
+      <span class="live-head-title">📋 本日の記録 — ${total}件</span>
+      <button class="live-head-clr" onclick="clearLive()">すべてクリア</button>
+    </div>
+    <div class="live-body">${entryHtml}${photoHtml}</div>
+  </div>`;
+}
+
+function refreshLive(){
+  const p = document.getElementById('live-panel');
+  if(p) p.innerHTML = buildLive();
+}
+
+// ════════════════════════
+// VOICE
+// ════════════════════════
+function toggleVoice(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ showToast('このブラウザは音声入力非対応です'); return; }
+  if(isRec){ recog?.stop(); return; }
+  recog = new SR(); recog.lang='ja-JP'; recog.continuous=true; recog.interimResults=false;
+  isRec = true;
+  const btn = document.getElementById('big-mic');
+  if(btn){ btn.classList.add('rec'); btn.querySelector('.mic-main').textContent='録音中… タップで停止'; }
+  document.getElementById('ta-wrap')?.classList.add('show');
+  recog.onresult = ev => {
+    const t = Array.from(ev.results).slice(ev.resultIndex).map(r=>r[0].transcript).join('');
+    const ta = document.getElementById('ta');
+    if(ta) ta.value += (ta.value?'\n':'') + t;
+  };
+  const stop = () => {
+    isRec = false;
+    const b = document.getElementById('big-mic');
+    if(b){ b.classList.remove('rec'); b.querySelector('.mic-main').textContent='タップして話す'; }
+  };
+  recog.onend = stop;
+  recog.onerror = () => { stop(); showToast('音声認識に失敗しました'); };
+  recog.start();
+}
+
+function clearInput(){
+  const ta = document.getElementById('ta'); if(ta) ta.value='';
+  document.getElementById('ta-wrap')?.classList.remove('show');
+}
+
+// ════════════════════════
+// PHOTO ATTACH
+// ════════════════════════
+function attachPhoto(input, key){
+  const file = input.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    attachedPhotos[key] = ev.target.result;
+    const prev = document.getElementById('pv-'+key);
+    const slot = document.getElementById('sl-'+key);
+    if(prev){ prev.src = ev.target.result; prev.style.display='block'; }
+    slot?.querySelector('.ps-icon')?.setAttribute('style','display:none');
+    slot?.querySelector('.ps-lbl')?.setAttribute('style','display:none');
+    slot?.classList.add('has');
+    document.getElementById('ta-wrap')?.classList.add('show');
+  };
+  reader.readAsDataURL(file);
+}
+
+function removePhoto(e, key){
+  e.stopPropagation();
+  delete attachedPhotos[key];
+  const prev = document.getElementById('pv-'+key);
+  const slot = document.getElementById('sl-'+key);
+  if(prev){ prev.src=''; prev.style.display='none'; }
+  slot?.querySelector('.ps-icon')?.removeAttribute('style');
+  slot?.querySelector('.ps-lbl')?.removeAttribute('style');
+  slot?.classList.remove('has');
+}
+
+// ════════════════════════
+// SUBMIT
+// ════════════════════════
+// Auto-detect date from text like "2/25" or "3月1日"
+function detectDateFromText(text){
+  const y = TODAY.getFullYear();
+  // Patterns: 2/25, 2月25日, 02/25
+  const m1 = text.match(/(\d{1,2})[\/月](\d{1,2})/);
+  if(m1){
+    const mo = String(m1[1]).padStart(2,'0');
+    const da = String(m1[2]).padStart(2,'0');
+    const candidate = `${y}.${mo}.${da}`;
+    // Only use if it's today or in the past
+    if(candidate <= todayKey) return candidate;
+  }
+  return null;
+}
+
+async function submitAll(){
+  const text = (document.getElementById('ta')?.value || '').trim();
+  const hasPhotos = Object.keys(attachedPhotos).length > 0;
+  if(!text && !hasPhotos){ showToast('テキストか写真が必要です'); return; }
+
+  // Auto-detect date from text
+  if(text){
+    const detected = detectDateFromText(text);
+    if(detected && detected !== saveDate){
+      saveDate = detected;
+      const input = document.getElementById('save-date-input');
+      if(input) input.value = detected.replace(/\./g,'-');
+      const badge = document.getElementById('save-date-badge');
+      if(badge) badge.textContent = detected === todayKey ? '今日' : '過去の日付（自動検出）';
+      const btn = document.getElementById('save-btn');
+      if(btn) btn.textContent = detected === todayKey ? '今日の記録を保存する' : `${detected} の記録を保存する`;
+    }
+  }
+
+  const btn = document.getElementById('submit-btn');
+  if(btn){ btn.disabled=true; btn.textContent='解析中…'; }
+
+  const lp = document.getElementById('live-panel');
+  if(lp) lp.innerHTML = `<div class="live-panel"><div class="live-head"><span class="live-head-title">解析中…</span></div><div class="live-body"><div class="analyzing"><div class="dot"></div><span>AIが解析しています</span></div></div></div>`;
+
+  const tasks = [];
+  if(text) tasks.push(parseText(text));
+  if(attachedPhotos.meal) tasks.push(analyzePhoto('meal', attachedPhotos.meal));
+  if(attachedPhotos.skin) tasks.push(analyzePhoto('skin', attachedPhotos.skin));
+  if(attachedPhotos.receipt) tasks.push(analyzePhoto('receipt', attachedPhotos.receipt));
+
+  await Promise.allSettled(tasks);
+
+  S('live_'+todayKey, liveResults);
+  S('pending_'+todayKey, liveResults.entries);
+
+  ['meal','skin','receipt'].forEach(k => {
+    delete attachedPhotos[k];
+    const pv = document.getElementById('pv-'+k);
+    const sl = document.getElementById('sl-'+k);
+    if(pv){ pv.src=''; pv.style.display='none'; }
+    sl?.querySelector('.ps-icon')?.removeAttribute('style');
+    sl?.querySelector('.ps-lbl')?.removeAttribute('style');
+    sl?.classList.remove('has');
+  });
+  clearInput();
+  refreshLive();
+  if(btn){ btn.disabled=false; btn.textContent='✦ AIに解析してもらう'; }
+  showToast(`記録しました ✓`);
+}
+
+// Direct save without AI — just store raw text as "other" entry
+function saveDirectly(){
+  const text = (document.getElementById('ta')?.value || '').trim();
+  if(!text){ showToast('テキストを入力してください'); return; }
+
+  // Auto-detect date
+  const detected = detectDateFromText(text);
+  const targetDate = detected || saveDate || todayKey;
+  if(detected && detected !== saveDate){
+    saveDate = detected;
+    const input = document.getElementById('save-date-input');
+    if(input) input.value = detected.replace(/\./g,'-');
+  }
+
+  // Store as raw entry
+  const entry = { category:'other', summary:text.slice(0,120), details:{ raw:text }, ts:Date.now() };
+  liveResults.entries.push(entry);
+  S('live_'+todayKey, liveResults);
+
+  // Also immediately save to the entries
+  const all = getAll().filter(e=>e.date!==targetDate);
+  const existing = getAll().find(e=>e.date===targetDate);
+  const newDay = { date:targetDate, ts:Date.now(), entries:[...(existing?.entries||[]), entry] };
+  all.push(newDay);
+  all.sort((a,b)=>b.date.localeCompare(a.date));
+  S('kiroku_entries', all);
+  S('live_'+todayKey, {entries:[],photos:[]});
+  liveResults = {entries:[],photos:[]};
+
+  clearInput();
+  refreshLive();
+  showToast(`${targetDate} に保存しました ✓`);
+}
+
+async function parseText(text){
+  const p = `以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":""}}]}\n複数の記録は別々のentryで。`;
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:p}] })
+    });
+    const d = await res.json();
+    const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+    const parsed = JSON.parse(raw);
+    liveResults.entries.push(...(parsed.entries||[]).map(e=>({...e, ts:Date.now()})));
+  }catch(e){ console.error('parseText',e); }
+}
+
+async function analyzePhoto(type, b64){
+  const [mtype, imgData] = b64.split(';base64,');
+  const mediaType = mtype.replace('data:','');
+  const prompts = {
+    meal: 'この食事の写真から栄養バランス（カロリー目安・タンパク質・炭水化物・脂質・野菜量）を推定し、一言アドバイスを日本語150字以内で。',
+    skin: 'この顔・肌の写真を見て、肌状態（乾燥・脂っぽさ・血色・赤み・くすみ・ニキビ等）を日本語150字以内で端的に分析してください。血色・全体状態・アドバイスを含めて。',
+    receipt: 'このレシートから {"store":"店名","total":合計金額数値,"category":"食費/日用品/交通費/娯楽/その他"} のJSONのみ返してください（前置き不要）。'
+  };
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{role:'user', content:[
+        {type:'image', source:{type:'base64', media_type:mediaType, data:imgData}},
+        {type:'text', text:prompts[type]}
+      ]}]})
+    });
+    const d = await res.json();
+    const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+    if(type==='receipt'){
+      try{
+        const parsed = JSON.parse(raw);
+        liveResults.photos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
+        if(parsed.total) liveResults.entries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
+      }catch(e){ liveResults.photos.push({ type:'receipt', text:raw }); }
+    } else {
+      liveResults.photos.push({ type, text:raw });
+      liveResults.entries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:raw }, ts:Date.now() });
+    }
+  }catch(e){ console.error('analyzePhoto',e); }
+}
+
+function delEntry(i){ liveResults.entries.splice(i,1); S('live_'+todayKey,liveResults); S('pending_'+todayKey,liveResults.entries); refreshLive(); }
+function delPhoto(i){ liveResults.photos.splice(i,1); S('live_'+todayKey,liveResults); refreshLive(); }
+function clearLive(){
+  if(!confirm('本日の解析結果をクリアしますか？')) return;
+  liveResults={entries:[],photos:[]}; S('live_'+todayKey,liveResults); S('pending_'+todayKey,[]); refreshLive();
+}
+
+let selectedMood = 0;
+function setMood(v){
+  selectedMood = v;
+  highlightMood(v);
+}
+function highlightMood(v){
+  for(let i=1;i<=5;i++){
+    const b = document.getElementById('mood-btn-'+i);
+    if(b) b.style.borderColor = i==v ? 'var(--accent2)' : 'var(--border2)';
+    if(b) b.style.background = i==v ? 'var(--card2)' : 'var(--bg2)';
+  }
+}
+
+// ════════════════════════
+// SAVE
+// ════════════════════════
+function saveToday(){
+  const toSave = liveResults.entries;
+  if(!toSave.length){ showToast('記録がありません'); return; }
+  const targetDate = saveDate || todayKey;
+  const all = getAll().filter(e=>e.date!==targetDate);
+  const existing = getAll().find(e=>e.date===targetDate);
+  // Insert in date order (newest first)
+  const newEntry = { date:targetDate, ts:Date.now(), entries:[...(existing?.entries||[]), ...toSave] };
+  if(targetDate === todayKey && selectedMood) newEntry.mood = selectedMood;
+  all.push(newEntry);
+  all.sort((a,b)=>b.date.localeCompare(a.date));
+  S('kiroku_entries', all);
+  S('live_'+todayKey, {entries:[],photos:[]});
+  liveResults = {entries:[],photos:[]};
+  refreshLive();
+  // Reset date to today
+  saveDate = todayKey;
+  const input = document.getElementById('save-date-input');
+  if(input) input.value = todayKey.replace(/\./g,'-');
+  const badge = document.getElementById('save-date-badge');
+  if(badge) badge.textContent = '今日';
+  const btn = document.getElementById('save-btn');
+  if(btn) btn.textContent = '今日の記録を保存する';
+  showToast(`${targetDate} の記録を保存しました ✓`);
+}
+
+// ════════════════════════
+// HISTORY
+// ════════════════════════
+function renderHistory(c){
+  const all = getAll();
+  const streak = calcStreak();
+  if(!all.length){ c.innerHTML='<div class="empty">まだ記録がありません。<br>「記録する」から始めましょう。</div>'; return; }
+
+  const streakBadge = streak >= 2 ? `<div style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:var(--card);border:1px solid var(--border2);border-radius:var(--r);margin-bottom:14px">
+    <span style="font-size:22px">🔥</span>
+    <div>
+      <div style="font-size:14px;font-weight:700;color:var(--accent3)">${streak}日連続記録中！</div>
+      <div style="font-size:10px;color:var(--chalk3)">この調子で続けましょう</div>
+    </div>
+  </div>` : '';
+
+  c.innerHTML = streakBadge + all.slice(0,90).map((day, di) => {
+    const sleepE = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+    const finBal = (day.entries||[]).filter(e=>e.category==='finance').reduce((s,e)=>s+(e.details?.transaction_type==='income'?e.details?.amount||0:-(e.details?.amount||0)),0);
+    const mood = day.mood;
+    const moodEmoji = mood ? ['','😞','😕','😐','🙂','😄'][mood] : '';
+    const pills = [];
+    if(sleepE) pills.push({t:`💤 ${sleepE.details.duration_h}h`, c:'sleep'});
+    if(day.entries?.some(e=>e.category==='meal')) pills.push({t:'🍱', c:'meal'});
+    if(day.entries?.some(e=>e.category==='skin')) pills.push({t:'✨', c:'skin'});
+    if(day.entries?.some(e=>e.category==='body')) pills.push({t:'🏃', c:'body'});
+    if(day.entries?.some(e=>e.category==='finance')) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
+    if(moodEmoji) pills.push({t:moodEmoji, c:'other'});
+
+    return `<div class="day-card" id="dc${di}">
+      <div class="day-head" onclick="document.getElementById('dc${di}').classList.toggle('open')">
+        <span class="day-date">${day.date}</span>
+        <div class="day-pills">${pills.map(p=>`<span class="dp" style="${CAT_DP[p.c]||''}">${p.t}</span>`).join('')}</div>
+      </div>
+      <div class="day-body">
+        ${(day.entries||[]).map((e,ei)=>`<div class="de" style="justify-content:space-between">
+          <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
+            <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
+            <span class="de-txt">${e.summary}</span>
+          </div>
+          <div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">
+            ${e.category==='other'&&e.details?.raw ? `<button onclick="reanalyzeEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font);white-space:nowrap">再解析</button>` : ''}
+            <button onclick="deleteEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">削除</button>
+          </div>
+        </div>`).join('')}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+          <span style="font-size:10px;color:var(--chalk3)">この日全体を削除</span>
+          <button onclick="deleteDay('${day.date}')" style="padding:5px 12px;background:none;border:1px solid var(--red-s);color:var(--red-s);font-size:10px;cursor:pointer;border-radius:20px;font-family:var(--font)">🗑 ${day.date} を削除</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function deleteDay(date){
+  if(!confirm(`${date} の記録をすべて削除しますか？`)) return;
+  const all = getAll().filter(e=>e.date!==date);
+  S('kiroku_entries', all);
+  renderHistory(document.getElementById('content'));
+  showToast('削除しました ✓');
+}
+
+function deleteEntry(date, ei){
+  if(!confirm('この項目を削除しますか？')) return;
+  const all = getAll();
+  const day = all.find(e=>e.date===date);
+  if(!day) return;
+  day.entries.splice(ei,1);
+  // Remove day if empty
+  const filtered = day.entries.length > 0 ? all : all.filter(e=>e.date!==date);
+  S('kiroku_entries', filtered);
+  renderHistory(document.getElementById('content'));
+  showToast('削除しました ✓');
+}
+
+async function reanalyzeEntry(date, ei){
+  const all = getAll();
+  const day = all.find(e=>e.date===date);
+  if(!day) return;
+  const entry = day.entries[ei];
+  const rawText = entry?.details?.raw || entry?.summary;
+  if(!rawText){ showToast('元のテキストがありません'); return; }
+
+  showToast('再解析中…');
+  const prompt = `以下は生活記録のテキストです。\nテキスト:「${rawText}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":"","raw":"${rawText}"}}]}\n複数の記録は別々のentryで。`;
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:prompt}] })
+    });
+    const d = await res.json();
+    const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+    const parsed = JSON.parse(raw);
+    const newEntries = (parsed.entries||[]).map(e=>({...e, ts:Date.now()}));
+    // Replace old entry with new ones
+    day.entries.splice(ei, 1, ...newEntries);
+    S('kiroku_entries', all);
+    renderHistory(document.getElementById('content'));
+    showToast(`${newEntries.length}件に分割しました ✓`);
+  }catch(e){
+    showToast('再解析に失敗しました');
+  }
+}
+
+// ════════════════════════
+// REPORT
+// ════════════════════════
+const PERIODS = [{l:'7日',d:7},{l:'30日',d:30},{l:'90日',d:90},{l:'半年',d:180},{l:'1年',d:365},{l:'全期間',d:99999}];
+
+function renderReport(c){
+  const all = getAll();
+  const slice = all.slice(0, analysisPeriod===99999?all.length:analysisPeriod).reverse();
+  const btns = PERIODS.map(p=>`<button class="period-btn ${analysisPeriod===p.d?'active':''}" onclick="setPeriod(${p.d})">${p.l}</button>`).join('');
+
+  // Saved reports
+  const savedReports = L('saved_reports',[]);
+  const savedHtml = savedReports.length ? `
+    <div class="chart-card" style="margin-bottom:14px">
+      <div class="chart-head">📁 保存済みレポート（${savedReports.length}件）</div>
+      <div style="padding:4px 0">
+        ${savedReports.slice().reverse().map((r,i)=>`
+          <div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <div>
+              <div style="font-size:11px;color:var(--chalk2);font-weight:700">${r.period} — ${r.date}</div>
+              <div style="font-size:10px;color:var(--chalk3);margin-top:2px">${r.preview}</div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+              <button onclick="viewSavedReport(${savedReports.length-1-i})" style="padding:5px 10px;background:none;border:1px solid var(--border2);color:var(--chalk3);cursor:pointer;border-radius:20px;font-size:10px;font-family:var(--font)">表示</button>
+              <button onclick="deleteSavedReport(${savedReports.length-1-i})" style="padding:5px 10px;background:none;border:1px solid var(--border2);color:var(--chalk3);cursor:pointer;border-radius:20px;font-size:10px;font-family:var(--font)">削除</button>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  c.innerHTML = `
+    <div class="period-tabs">${btns}</div>
+    ${slice.length>=2 ? buildCharts(slice) : ''}
+    <button class="ai-run-btn" onclick="runReport()">✦ AIにレポートを作ってもらう（自動保存）</button>
+    <div class="spinner" id="ai-spin"><span class="spin">レポート作成中</span></div>
+    <div id="ai-out"></div>
+    ${savedHtml}
+  `;
+}
+
+function viewSavedReport(i){
+  const r = L('saved_reports',[])[i];
+  if(!r) return;
+  document.getElementById('ai-out').innerHTML = `<div class="ai-box"><h3>${r.period} レポート（${r.date}保存）</h3><p>${r.text.replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong style="color:var(--accent3)">$1</strong>')}</p></div>`;
+  document.getElementById('ai-out').scrollIntoView({behavior:'smooth'});
+}
+
+function deleteSavedReport(i){
+  if(!confirm('このレポートを削除しますか？')) return;
+  const reports = L('saved_reports',[]);
+  reports.splice(i,1);
+  S('saved_reports', reports);
+  renderReport(document.getElementById('content'));
+  showToast('削除しました');
+}
+function setPeriod(n){ analysisPeriod=n; render(); }
+
+// ════════════════════════
+// GRAPHS (SVG-based)
+// ════════════════════════
+function toMinutes(timeStr){
+  // Parse "3:30", "23:45", "0:00" etc. Returns minutes from midnight
+  if(!timeStr) return null;
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})/);
+  if(!m) return null;
+  return parseInt(m[1])*60 + parseInt(m[2]);
+}
+
+function sleepStartMinutes(details){
+  // bedtime stored as bed_time "23:30" or derive from duration+wake
+  if(details?.bed_time) return toMinutes(details.bed_time);
+  if(details?.sleep_start) return toMinutes(details.sleep_start);
+  // fallback: estimate from wake - duration
+  if(details?.duration_h && details?.wake_time){
+    const wake = toMinutes(details.wake_time);
+    if(wake !== null) return ((wake - details.duration_h*60) + 1440) % 1440;
+  }
+  return null;
+}
+
+function wakeMinutes(details){
+  if(details?.wake_time) return toMinutes(details.wake_time);
+  return null;
+}
+
+function makeSVGLine(days, valuesFn, color, label, unit, minY, maxY, yFmt){
+  const W = 320, H = 100, PAD = {t:8,r:8,b:28,l:36};
+  const iW = W - PAD.l - PAD.r;
+  const iH = H - PAD.t - PAD.b;
+  const vals = days.map(valuesFn);
+  const valid = vals.filter(v=>v!==null&&v!==undefined&&!isNaN(v));
+  if(!valid.length) return `<div style="padding:12px;font-size:11px;color:var(--chalk4);text-align:center">データなし</div>`;
+  const lo = Math.min(...valid), hi = Math.max(...valid);
+  const range = hi - lo || 1;
+  const scaleY = v => v===null ? null : PAD.t + iH - ((v-lo)/range)*iH;
+  const scaleX = i => PAD.l + (i/(days.length-1||1))*iW;
+
+  // Build path
+  let path = ''; let dotHtml = '';
+  vals.forEach((v,i)=>{
+    if(v===null) return;
+    const x = scaleX(i), y = scaleY(v);
+    path += path ? ` L${x},${y}` : `M${x},${y}`;
+    dotHtml += `<circle cx="${x}" cy="${y}" r="3" fill="${color}" opacity=".9"/>`;
+  });
+
+  // X axis labels (show every ~5 days)
+  const step = Math.max(1, Math.floor(days.length/6));
+  let xLabels = '';
+  days.forEach((d,i)=>{
+    if(i%step===0||i===days.length-1){
+      xLabels += `<text x="${scaleX(i)}" y="${H-4}" text-anchor="middle" fill="#6e8872" font-size="8">${d.date.slice(5)}</text>`;
+    }
+  });
+
+  // Y axis labels
+  const yVals = [lo, (lo+hi)/2, hi];
+  let yLabels = '';
+  yVals.forEach(v=>{
+    const y = scaleY(v);
+    yLabels += `<text x="${PAD.l-4}" y="${y+3}" text-anchor="end" fill="#6e8872" font-size="8">${yFmt?yFmt(v):Math.round(v*10)/10}${unit}</text>`;
+  });
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+    <line x1="${PAD.l}" y1="${PAD.t}" x2="${PAD.l}" y2="${PAD.t+iH}" stroke="#3d4d42" stroke-width="1"/>
+    <line x1="${PAD.l}" y1="${PAD.t+iH}" x2="${PAD.l+iW}" y2="${PAD.t+iH}" stroke="#3d4d42" stroke-width="1"/>
+    ${yLabels}${xLabels}
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" opacity=".85"/>
+    ${dotHtml}
+  </svg>`;
+}
+
+function timeLabel(mins){
+  if(mins===null||isNaN(mins)) return '';
+  const h = Math.floor(((mins%1440)+1440)%1440/60);
+  const m = Math.floor(mins%60);
+  return `${h}:${String(m).padStart(2,'0')}`;
+}
+
+function buildCharts(days){
+  // Data extraction
+  const getSleep = d => d.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+
+  const durVals   = d => { const s=getSleep(d); return s?s.details.duration_h:null; };
+  const bedVals   = d => { const s=getSleep(d); return s?sleepStartMinutes(s.details):null; };
+  const wakeVals  = d => { const s=getSleep(d); if(!s) return null; return wakeMinutes(s.details)||
+    (sleepStartMinutes(s.details)!==null ? (sleepStartMinutes(s.details)+s.details.duration_h*60)%1440 : null); };
+  const mealVals  = d => d.entries?.filter(e=>e.category==='meal').length||0;
+  const finVals   = d => Math.abs((d.entries||[]).filter(e=>e.category==='finance').reduce((s,e)=>s-(e.details?.amount||0),0));
+
+  const hasBed  = days.some(d=>bedVals(d)!==null);
+  const hasWake = days.some(d=>wakeVals(d)!==null);
+  const hasFin  = days.some(d=>finVals(d)>0);
+
+  const gc = (title, svg) => `
+    <div style="margin-bottom:6px">
+      <div style="font-size:10px;color:var(--chalk3);letter-spacing:.1em;margin-bottom:6px">${title}</div>
+      ${svg}
+    </div>`;
+
+  return `<div class="chart-card">
+    <div class="chart-head">📊 推移グラフ</div>
+    <div class="chart-body">
+      ${gc('😴 睡眠時間（h）', makeSVGLine(days,durVals,'#7090b8','睡眠時間','h',0,12,null))}
+      ${hasBed  ? gc('🌙 入眠時刻', makeSVGLine(days,bedVals,'#9080c8','入眠','',0,1440,timeLabel)) : ''}
+      ${hasWake ? gc('☀️ 起床時刻', makeSVGLine(days,wakeVals,'#d4a040','起床','',0,1440,timeLabel)) : ''}
+      ${gc('🍱 食事記録回数', makeSVGLine(days,mealVals,'#70a880','食事回数','回',0,5,null))}
+      ${hasFin  ? gc('💴 支出（円）', makeSVGLine(days,finVals,'#c8a040','支出','',0,null,v=>`¥${Math.round(v).toLocaleString()}`)) : ''}
+    </div>
+  </div>`;
+}
+
+// ════════════════════════
+// AUTO REPORT
+// ════════════════════════
+async function checkAutoReport(){
+  const last = L('auto_report_check', '');
+  if(last === todayKey) return; // already checked today
+  S('auto_report_check', todayKey);
+
+  const now = new Date(TODAY);
+  const dow = now.getDay(); // 0=Sun
+  const dom = now.getDate();
+  const mon = now.getMonth()+1;
+
+  const needsWeekly  = dow === 0; // every Sunday
+  const needsMonthly = dom === 1; // 1st of month
+  const needsYearly  = dom === 1 && mon === 1; // Jan 1
+
+  const reports = L('saved_reports',[]);
+
+  const alreadyDone = (type) => reports.some(r=>r.auto===type&&r.date===todayKey);
+
+  if(needsWeekly && !alreadyDone('weekly')){
+    showToast('週次レポートを自動生成中…');
+    await runAutoReport('weekly', 7, '週次');
+  }
+  if(needsMonthly && !alreadyDone('monthly')){
+    showToast('月次レポートを自動生成中…');
+    await runAutoReport('monthly', 30, '月次');
+  }
+  if(needsYearly && !alreadyDone('yearly')){
+    showToast('年次レポートを自動生成中…');
+    await runAutoReport('yearly', 365, '年次');
+  }
+}
+
+async function runAutoReport(type, days, label){
+  const all = getAll();
+  const slice = all.slice(0, days);
+  if(slice.length < 3) return; // not enough data
+
+  const summary = buildReportSummary(slice);
+  const prompt = buildReportPrompt(label, summary);
+
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:prompt}] })
+    });
+    const d = await res.json();
+    const text = d.content?.map(c=>c.text||'').join('') || '分析できませんでした';
+    const reports = L('saved_reports',[]);
+    reports.push({ period:label, date:todayKey, text, auto:type, preview:text.slice(0,60).replace(/\n/g,' ')+'…' });
+    S('saved_reports', reports);
+    showToast(`${label}レポートを保存しました ✓`);
+    if(currentNav==='report') renderReport(document.getElementById('content'));
+  }catch(e){ console.error('auto report failed',e); }
+}
+
+function buildReportSummary(slice){
+  return slice.map(day => {
+    const lines = [];
+    if(day.mood) lines.push(`気分:${['','最低','悪い','普通','良い','最高'][day.mood]}`);
+    (day.entries||[]).forEach(e => {
+      if(e.category==='sleep') lines.push(`睡眠:${e.details?.duration_h||'?'}h${e.details?.medication?' 眠剤':''}${e.details?.mouthpiece?' MP':''}`);
+      else if(e.category==='meal') lines.push(`食事(${e.details?.meal_type||''}):${e.summary}`);
+      else if(e.category==='skin') lines.push(`肌:${(e.details?.ai_result||e.summary).slice(0,60)}`);
+      else if(e.category==='body') lines.push(`運動:${e.summary}`);
+      else if(e.category==='finance') lines.push(`収支:${e.details?.transaction_type==='income'?'収入':'支出'}¥${e.details?.amount||0}`);
+      else lines.push(`メモ:${(e.details?.raw||e.summary).slice(0,80)}`);
+    });
+    return `[${day.date}] ${lines.join(' / ')||'記録なし'}`;
+  }).join('\n');
+}
+
+function buildReportPrompt(label, summary){
+  return `以下は${label}分の生活記録です。\n\n${summary}\n\n各項目を日本語で分析してください（各100〜150字）：\n\n**😴 睡眠**\n眠剤使用との関係、時間パターン、傾向。\n\n**🍱 食事・栄養**\n食事回数・バランスの安定性。未分類メモにも食事情報があれば読み取って分析してください。\n\n**✨ 肌**\n状態の変化・特徴（記録があれば）。\n\n**🏃 活動・趣味**\nギター・勉強・運動などの継続状況と励まし。\n\n**💴 収支**\n支出傾向と簡単なコメント（記録があれば）。\n\n**😊 気分の傾向**\n気分スコアのパターンや睡眠との関係（記録があれば）。\n\n**⭐ 総評とアドバイス**\nこの期間の一番よかった点（具体的に）と、次の期間への実行可能なアドバイスを1つ。\n\n温かく、具体的に、ポジティブに。`;
+}
+
+async function runReport(){
+  const all = getAll();
+  const slice = all.slice(0, analysisPeriod===99999?all.length:analysisPeriod);
+  if(!slice.length){ showToast('記録がありません'); return; }
+  document.getElementById('ai-spin')?.classList.add('show');
+  document.getElementById('ai-out').innerHTML = '';
+
+  const pl = PERIODS.find(p=>p.d===analysisPeriod)?.l || `${analysisPeriod}日`;
+  const summary = buildReportSummary(slice);
+  const prompt = buildReportPrompt(pl, summary);
+
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:prompt}] })
+    });
+    const d = await res.json();
+    const text = d.content?.map(c=>c.text||'').join('') || '分析できませんでした';
+    document.getElementById('ai-spin')?.classList.remove('show');
+    document.getElementById('ai-out').innerHTML = `<div class="ai-box"><h3>${pl} レポート</h3><p>${text.replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong style="color:var(--accent3)">$1</strong>')}</p></div>`;
+    const reports = L('saved_reports',[]);
+    reports.push({ period:pl, date:todayKey, text, preview:text.slice(0,60).replace(/\n/g,' ')+'…' });
+    S('saved_reports', reports);
+    showToast('レポートを保存しました ✓');
+  }catch(e){
+    document.getElementById('ai-spin')?.classList.remove('show');
+    showToast('レポート作成に失敗しました');
+  }
+}
+
+// ════════════════════════
+// BACKUP & RESTORE
+// ════════════════════════
+function doBackup(){
+  const data = {};
+  for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); data[k]=localStorage.getItem(k); }
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=`記録バックアップ_${todayKey}.json`; a.click();
+  URL.revokeObjectURL(url);
+  showToast('バックアップを保存しました ✓');
+}
+
+function restoreBackup(input){
+  const file = input.files[0]; if(!file) return;
+  if(!confirm('バックアップから復元しますか？\n現在のデータと統合されます（上書きはしません）。')) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try{
+      const data = JSON.parse(ev.target.result);
+      // Restore all keys
+      Object.entries(data).forEach(([k,v]) => {
+        if(!localStorage.getItem(k)) localStorage.setItem(k, v);
+      });
+      // Then run migration to consolidate into kiroku_entries
+      migrateOldData();
+      showToast('復元しました ✓ リロードします…');
+      setTimeout(() => location.reload(), 1200);
+    }catch(e){
+      showToast('復元に失敗しました');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ════════════════════════
+// TOAST
+// ════════════════════════
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+render();
+checkAutoReport();
+</script>
+</body>
+</html>
