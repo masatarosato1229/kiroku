@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- v18 -->
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -519,6 +520,8 @@ function renderRecord(c){
           <button class="clr-btn" onclick="saveDirectly()" style="border-color:var(--chalk3);color:var(--chalk2);white-space:nowrap">そのまま保存</button>
           <button class="clr-btn" onclick="clearInput()">クリア</button>
         </div>
+        <!-- AI解析結果（テキストを消さずにここに表示） -->
+        <div id="ai-parse-result" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:14px"></div>
       </div>
     </div>
 
@@ -711,29 +714,84 @@ async function submitAll(){
   const btn = document.getElementById('submit-btn');
   if(btn){ btn.disabled=true; btn.textContent='解析中…'; }
 
-  const lp = document.getElementById('live-panel');
-  if(lp) lp.innerHTML = `<div class="live-panel"><div class="live-head"><span class="live-head-title">解析中…</span></div><div class="live-body"><div class="analyzing"><div class="dot"></div><span>AIが解析しています</span></div></div></div>`;
+  // ★ テキストは消さず、解析中インジケータをテキストの下に表示
+  const parseResult = document.getElementById('ai-parse-result');
+  if(parseResult){
+    parseResult.style.display = 'block';
+    parseResult.innerHTML = `<div class="analyzing"><div class="dot"></div><span>AIが解析しています…</span></div>`;
+  }
+
+  // 今回の解析バッファ（既存liveResultsとは別に保持）
+  const newEntries = [];
+  const newPhotos  = [];
 
   const tasks = [];
-  if(text) tasks.push(parseText(text));
-  // Handle multi-photos per type
+  if(text) tasks.push(parseTextInto(text, newEntries));
   ['meal','skin','receipt'].forEach(type => {
     const photos = Array.isArray(attachedPhotos[type]) ? attachedPhotos[type] : (attachedPhotos[type] ? [attachedPhotos[type]] : []);
-    photos.forEach(b64 => tasks.push(analyzePhoto(type, b64)));
+    photos.forEach(b64 => tasks.push(analyzePhotoInto(type, b64, newEntries, newPhotos)));
   });
 
   await Promise.allSettled(tasks);
 
+  // 解析結果を liveResults に追加
+  liveResults.entries.push(...newEntries);
+  liveResults.photos.push(...newPhotos);
   S('live_'+todayKey, liveResults);
   S('pending_'+todayKey, liveResults.entries);
 
-  // Reset photos
+  // ★ 解析結果をテキストの下に表示（テキストは消さない）
+  if(parseResult){
+    if(newEntries.length || newPhotos.length){
+      const entryHtml = newEntries.map(e => `
+        <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg2);border-radius:var(--r2);margin-bottom:6px">
+          <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
+          <span style="flex:1;font-size:12px;color:var(--chalk2);line-height:1.7">${e.summary}</span>
+        </div>`).join('');
+      const photoHtml = newPhotos.map(p => `
+        <div style="padding:10px 12px;background:var(--bg2);border-radius:var(--r2);margin-bottom:6px;font-size:12px;color:var(--chalk2);line-height:1.9">
+          <strong style="font-size:10px;color:var(--chalk);letter-spacing:.06em">${{meal:'🍱 食事分析',skin:'✨ 肌の分析',receipt:'🧾 レシート読み取り'}[p.type]||p.type}</strong><br>${p.text}
+        </div>`).join('');
+      parseResult.innerHTML = `
+        <div style="font-size:10px;color:var(--accent3);letter-spacing:.1em;margin-bottom:10px;font-weight:700">✦ AI解析結果 — ${newEntries.length}件</div>
+        ${entryHtml}${photoHtml}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button onclick="saveFromParseResult()" style="flex:1;padding:13px;background:var(--accent2);color:var(--bg);border:none;border-radius:var(--r2);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.08em">✓ この内容で保存する</button>
+          <button onclick="discardParseResult()" style="padding:13px 16px;background:transparent;border:1px solid var(--border2);color:var(--chalk3);border-radius:var(--r2);font-family:var(--font);font-size:12px;cursor:pointer">破棄</button>
+        </div>`;
+    } else {
+      parseResult.innerHTML = `<div style="font-size:12px;color:var(--chalk3);padding:8px 0">解析結果がありません。テキストを確認してください。</div>`;
+    }
+  }
+
+  // 写真リセット
   attachedPhotos = { meal:[], skin:[], receipt:[] };
   ['meal','skin','receipt'].forEach(type => renderPhotoRow(type));
-  clearInput();
   refreshLive();
   if(btn){ btn.disabled=false; btn.textContent='✦ AIに解析してもらう'; }
   showToast('解析しました ✓');
+}
+
+// 解析結果をそのまま保存（テキストも保持したままsaveToday呼び出し）
+function saveFromParseResult(){
+  saveToday();
+  // 解析結果パネルを閉じる
+  const parseResult = document.getElementById('ai-parse-result');
+  if(parseResult){ parseResult.style.display='none'; parseResult.innerHTML=''; }
+  // テキストもクリア
+  const ta = document.getElementById('ta'); if(ta) ta.value='';
+}
+
+// 解析結果を破棄（テキストは残す）
+function discardParseResult(){
+  // 今回追加分をliveResultsから除去するのは難しいので全クリア
+  liveResults = {entries:[],photos:[]};
+  S('live_'+todayKey, liveResults);
+  S('pending_'+todayKey, []);
+  const parseResult = document.getElementById('ai-parse-result');
+  if(parseResult){ parseResult.style.display='none'; parseResult.innerHTML=''; }
+  refreshLive();
+  showToast('解析結果を破棄しました');
 }
 
 // Direct save without AI — just store raw text as "other" entry
@@ -755,12 +813,16 @@ function saveDirectly(){
   liveResults.entries.push(entry);
   S('live_'+todayKey, liveResults);
 
-  // Also immediately save to the entries
-  const all = getAll().filter(e=>e.date!==targetDate);
-  const existing = getAll().find(e=>e.date===targetDate);
-  const newDay = { date:targetDate, ts:Date.now(), entries:[...(existing?.entries||[]), entry] };
-  all.push(newDay);
-  all.sort((a,b)=>b.date.localeCompare(a.date));
+  // Also immediately save to the entries (merge with existing day)
+  const all = getAll();
+  const existingIdx = all.findIndex(e => e.date === targetDate);
+  if(existingIdx >= 0){
+    all[existingIdx].entries = [...(all[existingIdx].entries || []), entry];
+    all[existingIdx].ts = Date.now();
+  } else {
+    all.push({ date:targetDate, ts:Date.now(), entries:[entry] });
+  }
+  all.sort((a,b) => b.date.localeCompare(a.date));
   S('kiroku_entries', all);
   S('live_'+todayKey, {entries:[],photos:[]});
   liveResults = {entries:[],photos:[]};
@@ -771,6 +833,10 @@ function saveDirectly(){
 }
 
 async function parseText(text){
+  await parseTextInto(text, liveResults.entries);
+}
+
+async function parseTextInto(text, targetArr){
   const p = `以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":""}}]}\n複数の記録は別々のentryで。`;
   try{
     const res = await fetch('https://api.anthropic.com/v1/messages',{
@@ -780,11 +846,15 @@ async function parseText(text){
     const d = await res.json();
     const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
     const parsed = JSON.parse(raw);
-    liveResults.entries.push(...(parsed.entries||[]).map(e=>({...e, ts:Date.now()})));
+    targetArr.push(...(parsed.entries||[]).map(e=>({...e, ts:Date.now()})));
   }catch(e){ console.error('parseText',e); }
 }
 
 async function analyzePhoto(type, b64){
+  await analyzePhotoInto(type, b64, liveResults.entries, liveResults.photos);
+}
+
+async function analyzePhotoInto(type, b64, targetEntries, targetPhotos){
   const [mtype, imgData] = b64.split(';base64,');
   const mediaType = mtype.replace('data:','');
   const prompts = {
@@ -805,12 +875,12 @@ async function analyzePhoto(type, b64){
     if(type==='receipt'){
       try{
         const parsed = JSON.parse(raw);
-        liveResults.photos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
-        if(parsed.total) liveResults.entries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
-      }catch(e){ liveResults.photos.push({ type:'receipt', text:raw }); }
+        targetPhotos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
+        if(parsed.total) targetEntries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
+      }catch(e){ targetPhotos.push({ type:'receipt', text:raw }); }
     } else {
-      liveResults.photos.push({ type, text:raw });
-      liveResults.entries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:raw, photo_b64:b64 }, ts:Date.now() });
+      targetPhotos.push({ type, text:raw });
+      targetEntries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:raw, photo_b64:b64 }, ts:Date.now() });
     }
   }catch(e){ console.error('analyzePhoto',e); }
 }
@@ -842,13 +912,21 @@ function saveToday(){
   const toSave = liveResults.entries;
   if(!toSave.length){ showToast('記録がありません'); return; }
   const targetDate = saveDate || todayKey;
-  const all = getAll().filter(e=>e.date!==targetDate);
-  const existing = getAll().find(e=>e.date===targetDate);
-  // Insert in date order (newest first)
-  const newEntry = { date:targetDate, ts:Date.now(), entries:[...(existing?.entries||[]), ...toSave] };
-  if(targetDate === todayKey && selectedMood) newEntry.mood = selectedMood;
-  all.push(newEntry);
-  all.sort((a,b)=>b.date.localeCompare(a.date));
+
+  // ★ 同日付に既存データがあれば合流（entries追記）
+  const all = getAll();
+  const existingIdx = all.findIndex(e => e.date === targetDate);
+  if(existingIdx >= 0){
+    // 既存の日付レコードにentriesを追加
+    all[existingIdx].entries = [...(all[existingIdx].entries || []), ...toSave];
+    if(selectedMood) all[existingIdx].mood = selectedMood;
+    all[existingIdx].ts = Date.now();
+  } else {
+    const newEntry = { date:targetDate, ts:Date.now(), entries:toSave };
+    if(selectedMood) newEntry.mood = selectedMood;
+    all.push(newEntry);
+  }
+  all.sort((a,b) => b.date.localeCompare(a.date));
   S('kiroku_entries', all);
   S('live_'+todayKey, {entries:[],photos:[]});
   liveResults = {entries:[],photos:[]};
