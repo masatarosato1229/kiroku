@@ -984,6 +984,8 @@ function editEntry(date, ei){
   renderHistory(document.getElementById('content'));
   showToast('編集しました ✓');
 }
+
+function deleteEntry(date, ei){
   if(!confirm('この項目を削除しますか？')) return;
   const all = getAll();
   const day = all.find(e=>e.date===date);
