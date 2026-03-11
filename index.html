@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- v18 -->
+<!-- v19 -->
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -287,6 +287,43 @@ body::after {
 .spin::after { content:''; animation:dots 1.4s infinite; }
 @keyframes dots { 0%{content:''}33%{content:'.'}66%{content:'..'}100%{content:'...'} }
 
+/* ── FEEDBACK AREA ── */
+.feedback-card {
+  background:var(--bg2); border:1px solid var(--border2);
+  border-radius:var(--r2); padding:14px 16px; margin-bottom:8px;
+}
+.feedback-card.loading {
+  display:flex; align-items:center; gap:10px;
+  color:var(--chalk3); font-size:11px;
+}
+.feedback-entry {
+  display:flex; align-items:flex-start; gap:10px;
+  padding:9px 12px; background:var(--card);
+  border-radius:var(--r2); margin-bottom:6px;
+  animation: fadeUp .3s ease both;
+}
+.feedback-entry:last-child { margin-bottom:0; }
+@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+.feedback-photo {
+  background:var(--card); border-radius:var(--r2); padding:12px 14px;
+  margin-bottom:6px; font-size:12px; line-height:1.9; color:var(--chalk2);
+  border-left:3px solid var(--border2); animation: fadeUp .3s ease both;
+}
+.feedback-photo strong { color:var(--chalk); font-size:10px; letter-spacing:.06em; }
+.feedback-save-row { display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.feedback-save-btn {
+  flex:1; padding:12px; background:var(--accent2); color:var(--bg);
+  border:none; border-radius:var(--r2); font-family:var(--font);
+  font-size:13px; font-weight:700; cursor:pointer; letter-spacing:.06em; transition:all .2s;
+}
+.feedback-save-btn:hover { background:var(--accent3); }
+.feedback-discard-btn {
+  padding:12px 16px; background:transparent; border:1px solid var(--border2);
+  color:var(--chalk3); border-radius:var(--r2); font-family:var(--font);
+  font-size:12px; cursor:pointer; transition:all .15s;
+}
+.feedback-discard-btn:hover { border-color:var(--chalk3); color:var(--chalk); }
+
 /* ── TOAST ── */
 .toast {
   position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(12px);
@@ -361,6 +398,7 @@ function migrateOldData(){
   }
 }
 migrateOldData();
+let currentNav = 'record';
 let analysisPeriod = 7;
 let recog = null, isRec = false;
 let attachedPhotos = {};
@@ -516,12 +554,11 @@ function renderRecord(c){
       <div class="ta-wrap show" id="ta-wrap">
         <textarea class="ta" id="ta" placeholder="ここに話した内容が入ります。直接テキストを入力・貼り付けもできます。&#10;例：睡眠記録、入眠3時、起床9時、眠剤あり。食事1食目パン、ヨーグルト。"></textarea>
         <div class="action-row">
-          <button class="submit-btn" id="submit-btn" onclick="submitAll()">✦ AIに解析してもらう</button>
-          <button class="clr-btn" onclick="saveDirectly()" style="border-color:var(--chalk3);color:var(--chalk2);white-space:nowrap">そのまま保存</button>
+          <button class="submit-btn" id="submit-btn" onclick="submitAndSave()">✦ 保存（解析して記録）</button>
           <button class="clr-btn" onclick="clearInput()">クリア</button>
         </div>
-        <!-- AI解析結果（テキストを消さずにここに表示） -->
-        <div id="ai-parse-result" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:14px"></div>
+        <!-- ② 即時フィードバックエリア：テキスト・写真を保持したまま結果を表示 -->
+        <div id="ai-feedback" style="display:none;margin-top:14px"></div>
       </div>
     </div>
 
@@ -692,152 +729,202 @@ function detectDateFromText(text){
   return null;
 }
 
-async function submitAll(){
+// ════════════════════════
+// ③ キーワード自動カテゴライズ
+// ════════════════════════
+const KEYWORD_RULES = [
+  { category:'sleep',   keywords:['睡眠','起床','就寝','入眠','起き','寝た','眠れ','眠剤','デエビゴ','マウスピース','目覚め','不眠','寝付','起きた','寝る','寝ました'] },
+  { category:'meal',    keywords:['食事','食べ','朝食','昼食','夕食','朝ごはん','昼ごはん','夕ごはん','夜ごはん','食った','飲んだ','カロリー','栄養','お腹','間食','おやつ','ランチ','ディナー','ブランチ','ご飯','パン','麺','肉','野菜','果物','ドリンク','ヨーグルト','スープ','サラダ'] },
+  { category:'skin',    keywords:['肌','ニキビ','乾燥','脂っぽ','毛穴','化粧水','保湿','日焼け','くすみ','赤み','かゆ','荒れ','スキンケア','洗顔'] },
+  { category:'body',    keywords:['運動','筋トレ','ジョギング','ウォーキング','ランニング','散歩','ジム','トレーニング','ストレッチ','泳','スポーツ','歩','走','体重','体脂肪'] },
+  { category:'finance', keywords:['円','支出','収入','購入','買','費','代金','料金','支払','給料','コスト','節約','出費','お金'] },
+];
+
+function autoCategory(text){
+  const t = text;
+  for(const rule of KEYWORD_RULES){
+    if(rule.keywords.some(kw => t.includes(kw))) return rule.category;
+  }
+  return 'other';
+}
+
+// ════════════════════════
+// ④ 写真解析（将来API差し替え可能な独立非同期関数）
+// ════════════════════════
+async function analyzeImageWithAI(type, b64){
+  // ── 本番：Claude Vision API ──
+  const [mtype, imgData] = b64.split(';base64,');
+  const mediaType = mtype.replace('data:','');
+  const prompts = {
+    meal:    'この食事の写真から栄養バランス（カロリー目安・タンパク質・炭水化物・脂質・野菜量）を推定し、一言アドバイスを日本語150字以内で。',
+    skin:    'この顔・肌の写真を見て、肌状態（乾燥・脂っぽさ・血色・赤み・くすみ・ニキビ等）を日本語150字以内で端的に分析してください。血色・全体状態・アドバイスを含めて。',
+    receipt: 'このレシートから {"store":"店名","total":合計金額数値,"category":"食費/日用品/交通費/娯楽/その他"} のJSONのみ返してください（前置き不要）。'
+  };
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{ role:'user', content:[
+        { type:'image', source:{ type:'base64', media_type:mediaType, data:imgData }},
+        { type:'text',  text:prompts[type] }
+      ]}]})
+    });
+    const d = await res.json();
+    return d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim() || null;
+  } catch(e) {
+    console.error('analyzeImageWithAI', e);
+    return null;
+  }
+}
+
+// ════════════════════════
+// ① 統合保存関数（解析→即時表示→保存）
+// ② テキスト・写真を保持したままフィードバック表示
+// ════════════════════════
+async function submitAndSave(){
   const text = (document.getElementById('ta')?.value || '').trim();
-  const hasPhotos = Object.values(attachedPhotos).some(arr => Array.isArray(arr) ? arr.length>0 : !!arr);
+  const hasPhotos = Object.values(attachedPhotos).some(a => Array.isArray(a) ? a.length > 0 : !!a);
   if(!text && !hasPhotos){ showToast('テキストか写真が必要です'); return; }
 
-  // Auto-detect date from text
+  // 日付自動検出
   if(text){
     const detected = detectDateFromText(text);
     if(detected && detected !== saveDate){
       saveDate = detected;
-      const input = document.getElementById('save-date-input');
-      if(input) input.value = detected.replace(/\./g,'-');
+      const inp = document.getElementById('save-date-input');
+      if(inp) inp.value = detected.replace(/\./g,'-');
       const badge = document.getElementById('save-date-badge');
       if(badge) badge.textContent = detected === todayKey ? '今日' : '過去の日付（自動検出）';
-      const btn = document.getElementById('save-btn');
-      if(btn) btn.textContent = detected === todayKey ? '今日の記録を保存する' : `${detected} の記録を保存する`;
+      const sbtn = document.getElementById('save-btn');
+      if(sbtn) sbtn.textContent = detected === todayKey ? '今日の記録を保存する' : `${detected} の記録を保存する`;
     }
   }
 
+  // ── ボタン無効化
   const btn = document.getElementById('submit-btn');
   if(btn){ btn.disabled=true; btn.textContent='解析中…'; }
 
-  // ★ テキストは消さず、解析中インジケータをテキストの下に表示
-  const parseResult = document.getElementById('ai-parse-result');
-  if(parseResult){
-    parseResult.style.display = 'block';
-    parseResult.innerHTML = `<div class="analyzing"><div class="dot"></div><span>AIが解析しています…</span></div>`;
+  // ── ② ローディング表示（テキスト・写真は保持したまま）
+  const fb = document.getElementById('ai-feedback');
+  if(fb){
+    fb.style.display = 'block';
+    fb.innerHTML = `<div class="feedback-card loading"><div class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--accent2);animation:blink .8s ease-in-out infinite;flex-shrink:0"></div><span>AIが解析しています…</span></div>`;
   }
 
-  // 今回の解析バッファ（既存liveResultsとは別に保持）
+  // ── 解析バッファ（liveResultsとは独立）
   const newEntries = [];
   const newPhotos  = [];
 
-  const tasks = [];
-  if(text) tasks.push(parseTextInto(text, newEntries));
+  // ── テキスト解析
+  if(text){
+    await (async () => {
+      const p = `以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":"","raw":"${text.replace(/"/g,"'")}"}}]}\n複数の記録は別々のentryで。`;
+      try{
+        const res = await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:p}] })
+        });
+        const d = await res.json();
+        const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+        const parsed = JSON.parse(raw);
+        // ③ AIカテゴリが 'other' の場合はキーワード補正
+        const entries = (parsed.entries||[]).map(e => {
+          if(e.category === 'other'){
+            const kw = autoCategory(e.details?.raw || e.summary || text);
+            if(kw !== 'other') e.category = kw;
+          }
+          return { ...e, ts:Date.now() };
+        });
+        newEntries.push(...entries);
+      }catch(err){ console.error('parseText', err); }
+    })();
+  }
+
+  // ── 写真解析（④ analyzeImageWithAI を使用）
+  const photoTasks = [];
   ['meal','skin','receipt'].forEach(type => {
-    const photos = Array.isArray(attachedPhotos[type]) ? attachedPhotos[type] : (attachedPhotos[type] ? [attachedPhotos[type]] : []);
-    photos.forEach(b64 => tasks.push(analyzePhotoInto(type, b64, newEntries, newPhotos)));
+    const arr = Array.isArray(attachedPhotos[type]) ? attachedPhotos[type] : (attachedPhotos[type] ? [attachedPhotos[type]] : []);
+    arr.forEach(b64 => photoTasks.push(
+      analyzeImageWithAI(type, b64).then(result => {
+        if(!result) return;
+        if(type === 'receipt'){
+          try{
+            const parsed = JSON.parse(result);
+            newPhotos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
+            if(parsed.total) newEntries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
+          }catch{ newPhotos.push({ type:'receipt', text:result }); }
+        } else {
+          newPhotos.push({ type, text:result });
+          newEntries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:result, photo_b64:b64 }, ts:Date.now() });
+        }
+      })
+    ));
   });
+  await Promise.allSettled(photoTasks);
 
-  await Promise.allSettled(tasks);
+  // ── ② 解析結果をフィードバックエリアに即時表示（テキスト・写真はそのまま）
+  if(fb){
+    if(!newEntries.length && !newPhotos.length){
+      fb.innerHTML = `<div class="feedback-card" style="font-size:12px;color:var(--chalk3)">解析結果が取得できませんでした。テキストを確認してください。</div>`;
+    } else {
+      const entryHtml = newEntries.map(e => `
+        <div class="feedback-entry">
+          <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
+          <span style="flex:1;font-size:12px;color:var(--chalk2);line-height:1.7">${e.summary}</span>
+        </div>`).join('');
+      const photoHtml = newPhotos.map(p => `
+        <div class="feedback-photo">
+          <strong>${{meal:'🍱 食事分析',skin:'✨ 肌の分析',receipt:'🧾 レシート'}[p.type]||p.type}</strong><br>
+          ${p.text}
+        </div>`).join('');
+      fb.innerHTML = `
+        <div style="font-size:10px;color:var(--accent3);letter-spacing:.1em;font-weight:700;margin-bottom:10px">✦ AI解析結果 — ${newEntries.length}件</div>
+        ${entryHtml}${photoHtml}
+        <div class="feedback-save-row">
+          <button class="feedback-save-btn" onclick="commitSave()">✓ この内容で保存する</button>
+          <button class="feedback-discard-btn" onclick="discardFeedback()">破棄</button>
+        </div>`;
+    }
+  }
 
-  // 解析結果を liveResults に追加
+  // liveResultsに追加
   liveResults.entries.push(...newEntries);
   liveResults.photos.push(...newPhotos);
   S('live_'+todayKey, liveResults);
   S('pending_'+todayKey, liveResults.entries);
 
-  // ★ 解析結果をテキストの下に表示（テキストは消さない）
-  if(parseResult){
-    if(newEntries.length || newPhotos.length){
-      const entryHtml = newEntries.map(e => `
-        <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg2);border-radius:var(--r2);margin-bottom:6px">
-          <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
-          <span style="flex:1;font-size:12px;color:var(--chalk2);line-height:1.7">${e.summary}</span>
-        </div>`).join('');
-      const photoHtml = newPhotos.map(p => `
-        <div style="padding:10px 12px;background:var(--bg2);border-radius:var(--r2);margin-bottom:6px;font-size:12px;color:var(--chalk2);line-height:1.9">
-          <strong style="font-size:10px;color:var(--chalk);letter-spacing:.06em">${{meal:'🍱 食事分析',skin:'✨ 肌の分析',receipt:'🧾 レシート読み取り'}[p.type]||p.type}</strong><br>${p.text}
-        </div>`).join('');
-      parseResult.innerHTML = `
-        <div style="font-size:10px;color:var(--accent3);letter-spacing:.1em;margin-bottom:10px;font-weight:700">✦ AI解析結果 — ${newEntries.length}件</div>
-        ${entryHtml}${photoHtml}
-        <div style="display:flex;gap:8px;margin-top:10px">
-          <button onclick="saveFromParseResult()" style="flex:1;padding:13px;background:var(--accent2);color:var(--bg);border:none;border-radius:var(--r2);font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.08em">✓ この内容で保存する</button>
-          <button onclick="discardParseResult()" style="padding:13px 16px;background:transparent;border:1px solid var(--border2);color:var(--chalk3);border-radius:var(--r2);font-family:var(--font);font-size:12px;cursor:pointer">破棄</button>
-        </div>`;
-    } else {
-      parseResult.innerHTML = `<div style="font-size:12px;color:var(--chalk3);padding:8px 0">解析結果がありません。テキストを確認してください。</div>`;
-    }
-  }
-
-  // 写真リセット
+  // 写真プレビューリセット
   attachedPhotos = { meal:[], skin:[], receipt:[] };
-  ['meal','skin','receipt'].forEach(type => renderPhotoRow(type));
+  ['meal','skin','receipt'].forEach(t => renderPhotoRow(t));
+
+  if(btn){ btn.disabled=false; btn.textContent='✦ 保存（解析して記録）'; }
   refreshLive();
-  if(btn){ btn.disabled=false; btn.textContent='✦ AIに解析してもらう'; }
-  showToast('解析しました ✓');
 }
 
-// 解析結果をそのまま保存（テキストも保持したままsaveToday呼び出し）
-function saveFromParseResult(){
+// フィードバックから保存確定
+function commitSave(){
   saveToday();
-  // 解析結果パネルを閉じる
-  const parseResult = document.getElementById('ai-parse-result');
-  if(parseResult){ parseResult.style.display='none'; parseResult.innerHTML=''; }
-  // テキストもクリア
-  const ta = document.getElementById('ta'); if(ta) ta.value='';
+  const fb = document.getElementById('ai-feedback');
+  if(fb){ fb.style.display='none'; fb.innerHTML=''; }
+  const ta = document.getElementById('ta');
+  if(ta) ta.value='';
 }
 
-// 解析結果を破棄（テキストは残す）
-function discardParseResult(){
-  // 今回追加分をliveResultsから除去するのは難しいので全クリア
-  liveResults = {entries:[],photos:[]};
+// フィードバック破棄（テキストは残す）
+function discardFeedback(){
+  liveResults = { entries:[], photos:[] };
   S('live_'+todayKey, liveResults);
   S('pending_'+todayKey, []);
-  const parseResult = document.getElementById('ai-parse-result');
-  if(parseResult){ parseResult.style.display='none'; parseResult.innerHTML=''; }
+  const fb = document.getElementById('ai-feedback');
+  if(fb){ fb.style.display='none'; fb.innerHTML=''; }
   refreshLive();
   showToast('解析結果を破棄しました');
 }
 
-// Direct save without AI — just store raw text as "other" entry
-function saveDirectly(){
-  const text = (document.getElementById('ta')?.value || '').trim();
-  if(!text){ showToast('テキストを入力してください'); return; }
-
-  // Auto-detect date
-  const detected = detectDateFromText(text);
-  const targetDate = detected || saveDate || todayKey;
-  if(detected && detected !== saveDate){
-    saveDate = detected;
-    const input = document.getElementById('save-date-input');
-    if(input) input.value = detected.replace(/\./g,'-');
-  }
-
-  // Store as raw entry
-  const entry = { category:'other', summary:text.slice(0,120), details:{ raw:text }, ts:Date.now() };
-  liveResults.entries.push(entry);
-  S('live_'+todayKey, liveResults);
-
-  // Also immediately save to the entries (merge with existing day)
-  const all = getAll();
-  const existingIdx = all.findIndex(e => e.date === targetDate);
-  if(existingIdx >= 0){
-    all[existingIdx].entries = [...(all[existingIdx].entries || []), entry];
-    all[existingIdx].ts = Date.now();
-  } else {
-    all.push({ date:targetDate, ts:Date.now(), entries:[entry] });
-  }
-  all.sort((a,b) => b.date.localeCompare(a.date));
-  S('kiroku_entries', all);
-  S('live_'+todayKey, {entries:[],photos:[]});
-  liveResults = {entries:[],photos:[]};
-
-  clearInput();
-  refreshLive();
-  showToast(`${targetDate} に保存しました ✓`);
-}
+// 後方互換のため残す（reanalyzeEntryなどが内部で使う）
+async function submitAll(){ await submitAndSave(); }
 
 async function parseText(text){
-  await parseTextInto(text, liveResults.entries);
-}
-
-async function parseTextInto(text, targetArr){
-  const p = `以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":""}}]}\n複数の記録は別々のentryで。`;
+  const p = `以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":""}}]}\n複数の記録は別々のentryで。`;
   try{
     const res = await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -846,43 +933,23 @@ async function parseTextInto(text, targetArr){
     const d = await res.json();
     const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
     const parsed = JSON.parse(raw);
-    targetArr.push(...(parsed.entries||[]).map(e=>({...e, ts:Date.now()})));
+    liveResults.entries.push(...(parsed.entries||[]).map(e=>({...e, ts:Date.now()})));
   }catch(e){ console.error('parseText',e); }
 }
 
 async function analyzePhoto(type, b64){
-  await analyzePhotoInto(type, b64, liveResults.entries, liveResults.photos);
-}
-
-async function analyzePhotoInto(type, b64, targetEntries, targetPhotos){
-  const [mtype, imgData] = b64.split(';base64,');
-  const mediaType = mtype.replace('data:','');
-  const prompts = {
-    meal: 'この食事の写真から栄養バランス（カロリー目安・タンパク質・炭水化物・脂質・野菜量）を推定し、一言アドバイスを日本語150字以内で。',
-    skin: 'この顔・肌の写真を見て、肌状態（乾燥・脂っぽさ・血色・赤み・くすみ・ニキビ等）を日本語150字以内で端的に分析してください。血色・全体状態・アドバイスを含めて。',
-    receipt: 'このレシートから {"store":"店名","total":合計金額数値,"category":"食費/日用品/交通費/娯楽/その他"} のJSONのみ返してください（前置き不要）。'
-  };
-  try{
-    const res = await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{role:'user', content:[
-        {type:'image', source:{type:'base64', media_type:mediaType, data:imgData}},
-        {type:'text', text:prompts[type]}
-      ]}]})
-    });
-    const d = await res.json();
-    const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
-    if(type==='receipt'){
-      try{
-        const parsed = JSON.parse(raw);
-        targetPhotos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
-        if(parsed.total) targetEntries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
-      }catch(e){ targetPhotos.push({ type:'receipt', text:raw }); }
-    } else {
-      targetPhotos.push({ type, text:raw });
-      targetEntries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:raw, photo_b64:b64 }, ts:Date.now() });
-    }
-  }catch(e){ console.error('analyzePhoto',e); }
+  const result = await analyzeImageWithAI(type, b64);
+  if(!result) return;
+  if(type==='receipt'){
+    try{
+      const parsed = JSON.parse(result);
+      liveResults.photos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
+      if(parsed.total) liveResults.entries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
+    }catch{ liveResults.photos.push({ type:'receipt', text:result }); }
+  } else {
+    liveResults.photos.push({ type, text:result });
+    liveResults.entries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:result, photo_b64:b64 }, ts:Date.now() });
+  }
 }
 
 function delEntry(i){ liveResults.entries.splice(i,1); S('live_'+todayKey,liveResults); S('pending_'+todayKey,liveResults.entries); refreshLive(); }
@@ -913,14 +980,13 @@ function saveToday(){
   if(!toSave.length){ showToast('記録がありません'); return; }
   const targetDate = saveDate || todayKey;
 
-  // ★ 同日付に既存データがあれば合流（entries追記）
+  // ★ 同日付がある場合は entries に追記（合流）
   const all = getAll();
-  const existingIdx = all.findIndex(e => e.date === targetDate);
-  if(existingIdx >= 0){
-    // 既存の日付レコードにentriesを追加
-    all[existingIdx].entries = [...(all[existingIdx].entries || []), ...toSave];
-    if(selectedMood) all[existingIdx].mood = selectedMood;
-    all[existingIdx].ts = Date.now();
+  const idx = all.findIndex(e => e.date === targetDate);
+  if(idx >= 0){
+    all[idx].entries = [...(all[idx].entries||[]), ...toSave];
+    if(selectedMood) all[idx].mood = selectedMood;
+    all[idx].ts = Date.now();
   } else {
     const newEntry = { date:targetDate, ts:Date.now(), entries:toSave };
     if(selectedMood) newEntry.mood = selectedMood;
@@ -931,7 +997,6 @@ function saveToday(){
   S('live_'+todayKey, {entries:[],photos:[]});
   liveResults = {entries:[],photos:[]};
   refreshLive();
-  // Reset date to today
   saveDate = todayKey;
   const input = document.getElementById('save-date-input');
   if(input) input.value = todayKey.replace(/\./g,'-');
@@ -1001,16 +1066,24 @@ function renderHistory(c){
   </div>` : '';
 
   c.innerHTML = streakBadge + all.slice(0,90).map((day, di) => {
-    const sleepE = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
-    const finBal = (day.entries||[]).filter(e=>e.category==='finance').reduce((s,e)=>s+(e.details?.transaction_type==='income'?e.details?.amount||0:-(e.details?.amount||0)),0);
+    // ③ 履歴表示時に 'other' カテゴリのエントリをキーワードで補正表示
+    const displayEntries = (day.entries||[]).map(e => {
+      if(e.category === 'other'){
+        const kw = autoCategory(e.details?.raw || e.summary || '');
+        return kw !== 'other' ? {...e, category:kw, _kwTagged:true} : e;
+      }
+      return e;
+    });
+    const sleepE = (displayEntries).find(e=>e.category==='sleep'&&e.details?.duration_h);
+    const finBal = (displayEntries).filter(e=>e.category==='finance').reduce((s,e)=>s+(e.details?.transaction_type==='income'?e.details?.amount||0:-(e.details?.amount||0)),0);
     const mood = day.mood;
     const moodEmoji = mood ? ['','😞','😕','😐','🙂','😄'][mood] : '';
     const pills = [];
     if(sleepE) pills.push({t:`💤 ${sleepE.details.duration_h}h`, c:'sleep'});
-    if(day.entries?.some(e=>e.category==='meal')) pills.push({t:'🍱', c:'meal'});
-    if(day.entries?.some(e=>e.category==='skin')) pills.push({t:'✨', c:'skin'});
-    if(day.entries?.some(e=>e.category==='body')) pills.push({t:'🏃', c:'body'});
-    if(day.entries?.some(e=>e.category==='finance')) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
+    if(displayEntries.some(e=>e.category==='meal')) pills.push({t:'🍱', c:'meal'});
+    if(displayEntries.some(e=>e.category==='skin')) pills.push({t:'✨', c:'skin'});
+    if(displayEntries.some(e=>e.category==='body')) pills.push({t:'🏃', c:'body'});
+    if(displayEntries.some(e=>e.category==='finance')) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
     if(moodEmoji) pills.push({t:moodEmoji, c:'other'});
 
     return `<div class="day-card" id="dc${di}">
@@ -1019,13 +1092,13 @@ function renderHistory(c){
         <div class="day-pills">${pills.map(p=>`<span class="dp" style="${CAT_DP[p.c]||''}">${p.t}</span>`).join('')}</div>
       </div>
       <div class="day-body">
-        ${(day.entries||[]).map((e,ei)=>`<div class="de" style="justify-content:space-between">
+        ${displayEntries.map((e,ei)=>`<div class="de" style="justify-content:space-between">
           <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
-            <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
+            <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}" title="${e._kwTagged?'キーワードで自動分類':''}">${CAT_LBL[e.category]||e.category}${e._kwTagged?'＊':''}</span>
             <span class="de-txt">${e.summary}</span>
           </div>
           <div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">
-            ${e.category==='other'&&e.details?.raw ? `<button onclick="reanalyzeEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font);white-space:nowrap">再解析</button>` : ''}
+            ${(e.category==='other'||e._kwTagged)&&(e.details?.raw||e.summary) ? `<button onclick="reanalyzeEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font);white-space:nowrap">再解析</button>` : ''}
             <button onclick="editEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--blue-s);color:var(--blue-s);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">編集</button>
             <button onclick="deleteEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">削除</button>
           </div>
