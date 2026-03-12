@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- v19 -->
+<!-- v20 -->
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -288,41 +288,32 @@ body::after {
 @keyframes dots { 0%{content:''}33%{content:'.'}66%{content:'..'}100%{content:'...'} }
 
 /* ── FEEDBACK AREA ── */
-.feedback-card {
-  background:var(--bg2); border:1px solid var(--border2);
-  border-radius:var(--r2); padding:14px 16px; margin-bottom:8px;
+.fb-head { font-size:10px; color:var(--accent3); letter-spacing:.1em; font-weight:700; margin-bottom:10px; }
+.fb-entry {
+  display:flex; align-items:flex-start; gap:8px; padding:8px 12px;
+  background:var(--card); border-radius:var(--r2); margin-bottom:6px;
+  animation:fadeUp .25s ease both;
 }
-.feedback-card.loading {
-  display:flex; align-items:center; gap:10px;
-  color:var(--chalk3); font-size:11px;
-}
-.feedback-entry {
-  display:flex; align-items:flex-start; gap:10px;
-  padding:9px 12px; background:var(--card);
-  border-radius:var(--r2); margin-bottom:6px;
-  animation: fadeUp .3s ease both;
-}
-.feedback-entry:last-child { margin-bottom:0; }
-@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
-.feedback-photo {
-  background:var(--card); border-radius:var(--r2); padding:12px 14px;
+.fb-photo {
+  background:var(--card); border-radius:var(--r2); padding:11px 14px;
   margin-bottom:6px; font-size:12px; line-height:1.9; color:var(--chalk2);
-  border-left:3px solid var(--border2); animation: fadeUp .3s ease both;
+  border-left:3px solid var(--border2); animation:fadeUp .25s ease both;
 }
-.feedback-photo strong { color:var(--chalk); font-size:10px; letter-spacing:.06em; }
-.feedback-save-row { display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
-.feedback-save-btn {
-  flex:1; padding:12px; background:var(--accent2); color:var(--bg);
-  border:none; border-radius:var(--r2); font-family:var(--font);
-  font-size:13px; font-weight:700; cursor:pointer; letter-spacing:.06em; transition:all .2s;
-}
-.feedback-save-btn:hover { background:var(--accent3); }
-.feedback-discard-btn {
-  padding:12px 16px; background:transparent; border:1px solid var(--border2);
-  color:var(--chalk3); border-radius:var(--r2); font-family:var(--font);
-  font-size:12px; cursor:pointer; transition:all .15s;
-}
-.feedback-discard-btn:hover { border-color:var(--chalk3); color:var(--chalk); }
+.fb-photo strong { color:var(--chalk); font-size:10px; letter-spacing:.06em; }
+.fb-loading { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--chalk3); padding:10px 0; }
+.fb-row { display:flex; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.fb-ok { flex:1; padding:13px; background:var(--accent2); color:var(--bg); border:none; border-radius:var(--r2); font-family:var(--font); font-size:13px; font-weight:700; cursor:pointer; letter-spacing:.06em; transition:all .2s; }
+.fb-ok:hover { background:var(--accent3); }
+.fb-ng { padding:13px 16px; background:transparent; border:1px solid var(--border2); color:var(--chalk3); border-radius:var(--r2); font-family:var(--font); font-size:12px; cursor:pointer; transition:all .15s; }
+.fb-ng:hover { border-color:var(--chalk3); color:var(--chalk); }
+@keyframes fadeUp { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:translateY(0)} }
+
+/* ── STATS TABLE (Report) ── */
+.stat-table { width:100%; border-collapse:collapse; }
+.stat-table th { padding:7px 10px; text-align:left; font-size:9px; color:var(--chalk3); font-weight:500; border-bottom:1px solid var(--border); }
+.stat-table td { padding:8px 10px; font-size:12px; color:var(--chalk2); border-bottom:1px solid var(--border); }
+.stat-table td:not(:first-child) { font-family:var(--mono); font-weight:700; color:var(--accent3); text-align:right; }
+.stat-table tr:last-child td { border-bottom:none; }
 
 /* ── TOAST ── */
 .toast {
@@ -554,10 +545,9 @@ function renderRecord(c){
       <div class="ta-wrap show" id="ta-wrap">
         <textarea class="ta" id="ta" placeholder="ここに話した内容が入ります。直接テキストを入力・貼り付けもできます。&#10;例：睡眠記録、入眠3時、起床9時、眠剤あり。食事1食目パン、ヨーグルト。"></textarea>
         <div class="action-row">
-          <button class="submit-btn" id="submit-btn" onclick="submitAndSave()">✦ 保存（解析して記録）</button>
+          <button class="submit-btn" id="submit-btn" onclick="submitAndSave(event)">✦ 保存（解析して記録）</button>
           <button class="clr-btn" onclick="clearInput()">クリア</button>
         </div>
-        <!-- ② 即時フィードバックエリア：テキスト・写真を保持したまま結果を表示 -->
         <div id="ai-feedback" style="display:none;margin-top:14px"></div>
       </div>
     </div>
@@ -730,29 +720,24 @@ function detectDateFromText(text){
 }
 
 // ════════════════════════
-// ③ キーワード自動カテゴライズ
+// キーワード自動カテゴライズ
 // ════════════════════════
 const KEYWORD_RULES = [
-  { category:'sleep',   keywords:['睡眠','起床','就寝','入眠','起き','寝た','眠れ','眠剤','デエビゴ','マウスピース','目覚め','不眠','寝付','起きた','寝る','寝ました'] },
-  { category:'meal',    keywords:['食事','食べ','朝食','昼食','夕食','朝ごはん','昼ごはん','夕ごはん','夜ごはん','食った','飲んだ','カロリー','栄養','お腹','間食','おやつ','ランチ','ディナー','ブランチ','ご飯','パン','麺','肉','野菜','果物','ドリンク','ヨーグルト','スープ','サラダ'] },
-  { category:'skin',    keywords:['肌','ニキビ','乾燥','脂っぽ','毛穴','化粧水','保湿','日焼け','くすみ','赤み','かゆ','荒れ','スキンケア','洗顔'] },
-  { category:'body',    keywords:['運動','筋トレ','ジョギング','ウォーキング','ランニング','散歩','ジム','トレーニング','ストレッチ','泳','スポーツ','歩','走','体重','体脂肪'] },
-  { category:'finance', keywords:['円','支出','収入','購入','買','費','代金','料金','支払','給料','コスト','節約','出費','お金'] },
+  { cat:'sleep',   kws:['睡眠','起床','就寝','入眠','起き','寝た','眠れ','眠剤','デエビゴ','マウスピース','目覚','不眠','寝付','起きた'] },
+  { cat:'meal',    kws:['食事','食べ','朝食','昼食','夕食','ご飯','パン','麺','肉','野菜','ヨーグルト','スープ','サラダ','ランチ','ディナー','カロリー','ドリンク','間食'] },
+  { cat:'skin',    kws:['肌','ニキビ','乾燥','脂っぽ','毛穴','保湿','スキンケア','洗顔','赤み','くすみ'] },
+  { cat:'body',    kws:['運動','筋トレ','ジョギング','ウォーキング','散歩','ジム','ストレッチ','体重','体脂肪'] },
+  { cat:'finance', kws:['円','支出','収入','購入','買','費','支払','給料','節約','出費','お金'] },
 ];
-
 function autoCategory(text){
-  const t = text;
-  for(const rule of KEYWORD_RULES){
-    if(rule.keywords.some(kw => t.includes(kw))) return rule.category;
-  }
+  for(const r of KEYWORD_RULES) if(r.kws.some(k=>text.includes(k))) return r.cat;
   return 'other';
 }
 
 // ════════════════════════
-// ④ 写真解析（将来API差し替え可能な独立非同期関数）
+// 写真解析（独立非同期関数 — API差し替え容易）
 // ════════════════════════
 async function analyzeImageWithAI(type, b64){
-  // ── 本番：Claude Vision API ──
   const [mtype, imgData] = b64.split(';base64,');
   const mediaType = mtype.replace('data:','');
   const prompts = {
@@ -760,195 +745,226 @@ async function analyzeImageWithAI(type, b64){
     skin:    'この顔・肌の写真を見て、肌状態（乾燥・脂っぽさ・血色・赤み・くすみ・ニキビ等）を日本語150字以内で端的に分析してください。血色・全体状態・アドバイスを含めて。',
     receipt: 'このレシートから {"store":"店名","total":合計金額数値,"category":"食費/日用品/交通費/娯楽/その他"} のJSONのみ返してください（前置き不要）。'
   };
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000, messages:[{ role:'user', content:[
-        { type:'image', source:{ type:'base64', media_type:mediaType, data:imgData }},
-        { type:'text',  text:prompts[type] }
-      ]}]})
+      body:JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:1000,
+        messages:[{role:'user',content:[
+          {type:'image',source:{type:'base64',media_type:mediaType,data:imgData}},
+          {type:'text',text:prompts[type]}
+        ]}]})
     });
     const d = await res.json();
     return d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim() || null;
-  } catch(e) {
-    console.error('analyzeImageWithAI', e);
-    return null;
-  }
+  }catch(e){ console.error('analyzeImageWithAI',e); return null; }
 }
 
 // ════════════════════════
-// ① 統合保存関数（解析→即時表示→保存）
-// ② テキスト・写真を保持したままフィードバック表示
+// 統合保存関数
+// 手順：① e.preventDefault → ② 先にlocalSave → ③ ローディング表示 → ④ AI解析 → ⑤ 結果表示
 // ════════════════════════
-async function submitAndSave(){
+async function submitAndSave(e){
+  if(e) e.preventDefault();
+
   const text = (document.getElementById('ta')?.value || '').trim();
-  const hasPhotos = Object.values(attachedPhotos).some(a => Array.isArray(a) ? a.length > 0 : !!a);
+  const hasPhotos = Object.values(attachedPhotos).some(a=>Array.isArray(a)?a.length>0:!!a);
   if(!text && !hasPhotos){ showToast('テキストか写真が必要です'); return; }
 
-  // 日付自動検出
+  // ── 日付自動検出
   if(text){
-    const detected = detectDateFromText(text);
-    if(detected && detected !== saveDate){
-      saveDate = detected;
+    const det = detectDateFromText(text);
+    if(det && det !== saveDate){
+      saveDate = det;
       const inp = document.getElementById('save-date-input');
-      if(inp) inp.value = detected.replace(/\./g,'-');
+      if(inp) inp.value = det.replace(/\./g,'-');
       const badge = document.getElementById('save-date-badge');
-      if(badge) badge.textContent = detected === todayKey ? '今日' : '過去の日付（自動検出）';
-      const sbtn = document.getElementById('save-btn');
-      if(sbtn) sbtn.textContent = detected === todayKey ? '今日の記録を保存する' : `${detected} の記録を保存する`;
+      if(badge) badge.textContent = det===todayKey?'今日':'過去の日付（自動検出）';
+      const sb = document.getElementById('save-btn');
+      if(sb) sb.textContent = det===todayKey?'今日の記録を保存する':`${det} の記録を保存する`;
     }
   }
 
-  // ── ボタン無効化
   const btn = document.getElementById('submit-btn');
-  if(btn){ btn.disabled=true; btn.textContent='解析中…'; }
+  if(btn){ btn.disabled=true; btn.textContent='保存中…'; }
 
-  // ── ② ローディング表示（テキスト・写真は保持したまま）
+  // ── ② 先にキーワード解析で即時保存（AI前に確実にlocalStorageへ）
+  const targetDate = saveDate || todayKey;
+  const quickCat = text ? autoCategory(text) : 'other';
+  const quickEntry = {
+    category: quickCat,
+    summary: text.slice(0,100) || '写真記録',
+    details:{ raw:text, _pending_ai:true },
+    ts: Date.now()
+  };
+  // localStorageに先保存（合流）
+  const allQ = getAll();
+  const idxQ = allQ.findIndex(d=>d.date===targetDate);
+  if(idxQ>=0){ allQ[idxQ].entries=[...(allQ[idxQ].entries||[]),quickEntry]; allQ[idxQ].ts=Date.now(); }
+  else allQ.push({date:targetDate,ts:Date.now(),entries:[quickEntry]});
+  allQ.sort((a,b)=>b.date.localeCompare(a.date));
+  S('kiroku_entries', allQ);
+  liveResults.entries.push(quickEntry);
+  S('live_'+todayKey, liveResults);
+  showToast('先に保存しました ✓ 解析中…');
+
+  // ── ③ フィードバックエリアにローディング表示（テキスト・写真はそのまま）
   const fb = document.getElementById('ai-feedback');
   if(fb){
-    fb.style.display = 'block';
-    fb.innerHTML = `<div class="feedback-card loading"><div class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--accent2);animation:blink .8s ease-in-out infinite;flex-shrink:0"></div><span>AIが解析しています…</span></div>`;
+    fb.style.display='block';
+    fb.innerHTML=`<div class="fb-loading"><div class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--accent2);animation:blink .8s ease-in-out infinite;flex-shrink:0"></div><span>AIが解析しています…</span></div>`;
   }
 
-  // ── 解析バッファ（liveResultsとは独立）
-  const newEntries = [];
-  const newPhotos  = [];
+  // ── ④ 非同期でAI解析
+  const aiEntries=[], aiPhotos=[];
 
-  // ── テキスト解析
+  // テキスト解析
   if(text){
-    await (async () => {
-      const p = `以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":"","raw":"${text.replace(/"/g,"'")}"}}]}\n複数の記録は別々のentryで。`;
-      try{
-        const res = await fetch('https://api.anthropic.com/v1/messages',{
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:p}] })
-        });
-        const d = await res.json();
-        const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
-        const parsed = JSON.parse(raw);
-        // ③ AIカテゴリが 'other' の場合はキーワード補正
-        const entries = (parsed.entries||[]).map(e => {
-          if(e.category === 'other'){
-            const kw = autoCategory(e.details?.raw || e.summary || text);
-            if(kw !== 'other') e.category = kw;
-          }
-          return { ...e, ts:Date.now() };
-        });
-        newEntries.push(...entries);
-      }catch(err){ console.error('parseText', err); }
-    })();
+    const p=`以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"protein_g":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":"","raw":"${text.replace(/"/g,"'")}"}}]}\n複数の記録は別々のentryで。`;
+    try{
+      const res=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2000,messages:[{role:'user',content:p}]})
+      });
+      const d=await res.json();
+      const raw=d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+      const parsed=JSON.parse(raw);
+      aiEntries.push(...(parsed.entries||[]).map(e=>{
+        if(e.category==='other'){const kw=autoCategory(e.details?.raw||e.summary||text);if(kw!=='other')e.category=kw;}
+        return{...e,ts:Date.now()};
+      }));
+    }catch(err){console.error('AI text parse',err);}
   }
 
-  // ── 写真解析（④ analyzeImageWithAI を使用）
-  const photoTasks = [];
-  ['meal','skin','receipt'].forEach(type => {
-    const arr = Array.isArray(attachedPhotos[type]) ? attachedPhotos[type] : (attachedPhotos[type] ? [attachedPhotos[type]] : []);
-    arr.forEach(b64 => photoTasks.push(
-      analyzeImageWithAI(type, b64).then(result => {
-        if(!result) return;
-        if(type === 'receipt'){
+  // 写真解析
+  const photoTasks=[];
+  ['meal','skin','receipt'].forEach(type=>{
+    const arr=Array.isArray(attachedPhotos[type])?attachedPhotos[type]:(attachedPhotos[type]?[attachedPhotos[type]]:[]);
+    arr.forEach(b64=>photoTasks.push(
+      analyzeImageWithAI(type,b64).then(result=>{
+        if(!result)return;
+        if(type==='receipt'){
           try{
-            const parsed = JSON.parse(result);
-            newPhotos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
-            if(parsed.total) newEntries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
-          }catch{ newPhotos.push({ type:'receipt', text:result }); }
+            const pj=JSON.parse(result);
+            aiPhotos.push({type:'receipt',text:`${pj.store||'店名不明'} — ¥${(pj.total||0).toLocaleString()} (${pj.category||'その他'})`});
+            if(pj.total) aiEntries.push({category:'finance',summary:`支出 ¥${pj.total.toLocaleString()} ${pj.store||''}`,details:{transaction_type:'expense',amount:pj.total,label:`${pj.store||''}(${pj.category||''})`},ts:Date.now()});
+          }catch{aiPhotos.push({type:'receipt',text:result});}
         } else {
-          newPhotos.push({ type, text:result });
-          newEntries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:result, photo_b64:b64 }, ts:Date.now() });
+          aiPhotos.push({type,text:result});
+          aiEntries.push({category:type,summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`,details:{ai_result:result,photo_b64:b64},ts:Date.now()});
         }
       })
     ));
   });
   await Promise.allSettled(photoTasks);
 
-  // ── ② 解析結果をフィードバックエリアに即時表示（テキスト・写真はそのまま）
-  if(fb){
-    if(!newEntries.length && !newPhotos.length){
-      fb.innerHTML = `<div class="feedback-card" style="font-size:12px;color:var(--chalk3)">解析結果が取得できませんでした。テキストを確認してください。</div>`;
-    } else {
-      const entryHtml = newEntries.map(e => `
-        <div class="feedback-entry">
-          <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
-          <span style="flex:1;font-size:12px;color:var(--chalk2);line-height:1.7">${e.summary}</span>
-        </div>`).join('');
-      const photoHtml = newPhotos.map(p => `
-        <div class="feedback-photo">
-          <strong>${{meal:'🍱 食事分析',skin:'✨ 肌の分析',receipt:'🧾 レシート'}[p.type]||p.type}</strong><br>
-          ${p.text}
-        </div>`).join('');
-      fb.innerHTML = `
-        <div style="font-size:10px;color:var(--accent3);letter-spacing:.1em;font-weight:700;margin-bottom:10px">✦ AI解析結果 — ${newEntries.length}件</div>
-        ${entryHtml}${photoHtml}
-        <div class="feedback-save-row">
-          <button class="feedback-save-btn" onclick="commitSave()">✓ この内容で保存する</button>
-          <button class="feedback-discard-btn" onclick="discardFeedback()">破棄</button>
-        </div>`;
+  // ── AI結果で先保存エントリを置き換え（AI成功時のみ）
+  if(aiEntries.length){
+    const allA=getAll();
+    const idxA=allA.findIndex(d=>d.date===targetDate);
+    if(idxA>=0){
+      // _pending_ai フラグの仮エントリを削除してAI結果に置き換え
+      allA[idxA].entries=(allA[idxA].entries||[]).filter(e=>!e.details?._pending_ai);
+      allA[idxA].entries.push(...aiEntries);
+      allA[idxA].ts=Date.now();
     }
+    allA.sort((a,b)=>b.date.localeCompare(a.date));
+    S('kiroku_entries',allA);
+    // liveResultsも更新
+    liveResults.entries=liveResults.entries.filter(e=>!e.details?._pending_ai);
+    liveResults.entries.push(...aiEntries);
+    liveResults.photos.push(...aiPhotos);
+    S('live_'+todayKey,liveResults);
   }
 
-  // liveResultsに追加
-  liveResults.entries.push(...newEntries);
-  liveResults.photos.push(...newPhotos);
-  S('live_'+todayKey, liveResults);
-  S('pending_'+todayKey, liveResults.entries);
-
   // 写真プレビューリセット
-  attachedPhotos = { meal:[], skin:[], receipt:[] };
-  ['meal','skin','receipt'].forEach(t => renderPhotoRow(t));
+  attachedPhotos={meal:[],skin:[],receipt:[]};
+  ['meal','skin','receipt'].forEach(t=>renderPhotoRow(t));
 
+  // ── ⑤ フィードバックエリアに解析結果を即時表示
+  if(fb){
+    const entries=aiEntries.length?aiEntries:[quickEntry];
+    const entryHtml=entries.map(e=>`
+      <div class="fb-entry">
+        <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
+        <span style="flex:1;font-size:12px;color:var(--chalk2);line-height:1.7">${e.summary}</span>
+      </div>`).join('');
+    const photoHtml=aiPhotos.map(p=>`
+      <div class="fb-photo">
+        <strong>${{meal:'🍱 食事分析',skin:'✨ 肌の分析',receipt:'🧾 レシート'}[p.type]||p.type}</strong><br>${p.text}
+      </div>`).join('');
+    fb.innerHTML=`
+      <div class="fb-head">✦ AI解析結果 — ${entries.length}件（保存済み）</div>
+      ${entryHtml}${photoHtml}
+      <div class="fb-row">
+        <button class="fb-ok" onclick="closeFeedback()">✓ OK</button>
+        <button class="fb-ng" onclick="clearAllAndReset()">クリア</button>
+      </div>`;
+  }
+
+  refreshLive();
   if(btn){ btn.disabled=false; btn.textContent='✦ 保存（解析して記録）'; }
+  showToast('解析・保存完了 ✓');
+}
+
+function closeFeedback(){
+  const fb=document.getElementById('ai-feedback');
+  if(fb){fb.style.display='none';fb.innerHTML='';}
+  const ta=document.getElementById('ta');if(ta)ta.value='';
+}
+
+function clearAllAndReset(){
+  liveResults={entries:[],photos:[]};
+  S('live_'+todayKey,liveResults);
+  const fb=document.getElementById('ai-feedback');
+  if(fb){fb.style.display='none';fb.innerHTML='';}
   refreshLive();
+  showToast('クリアしました');
 }
 
-// フィードバックから保存確定
-function commitSave(){
-  saveToday();
-  const fb = document.getElementById('ai-feedback');
-  if(fb){ fb.style.display='none'; fb.innerHTML=''; }
-  const ta = document.getElementById('ta');
-  if(ta) ta.value='';
-}
+// 後方互換
+async function submitAll(e){ await submitAndSave(e); }
 
-// フィードバック破棄（テキストは残す）
-function discardFeedback(){
-  liveResults = { entries:[], photos:[] };
-  S('live_'+todayKey, liveResults);
-  S('pending_'+todayKey, []);
-  const fb = document.getElementById('ai-feedback');
-  if(fb){ fb.style.display='none'; fb.innerHTML=''; }
-  refreshLive();
-  showToast('解析結果を破棄しました');
+async function saveDirectly(){
+  const text=(document.getElementById('ta')?.value||'').trim();
+  if(!text){showToast('テキストを入力してください');return;}
+  const det=detectDateFromText(text);
+  const targetDate=det||saveDate||todayKey;
+  if(det&&det!==saveDate){saveDate=det;const inp=document.getElementById('save-date-input');if(inp)inp.value=det.replace(/\./g,'-');}
+  const cat=autoCategory(text);
+  const entry={category:cat,summary:text.slice(0,120),details:{raw:text},ts:Date.now()};
+  liveResults.entries.push(entry);
+  const all=getAll();
+  const idx=all.findIndex(d=>d.date===targetDate);
+  if(idx>=0){all[idx].entries=[...(all[idx].entries||[]),entry];all[idx].ts=Date.now();}
+  else all.push({date:targetDate,ts:Date.now(),entries:[entry]});
+  all.sort((a,b)=>b.date.localeCompare(a.date));
+  S('kiroku_entries',all);
+  S('live_'+todayKey,{entries:[],photos:[]});
+  liveResults={entries:[],photos:[]};
+  clearInput();refreshLive();
+  showToast(`${targetDate} に保存しました ✓`);
 }
-
-// 後方互換のため残す（reanalyzeEntryなどが内部で使う）
-async function submitAll(){ await submitAndSave(); }
 
 async function parseText(text){
-  const p = `以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":""}}]}\n複数の記録は別々のentryで。`;
+  const p=`以下は生活記録の音声テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで返してください（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","summary":"50字以内サマリー","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"protein_g":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","activity":""}}]}\n複数の記録は別々のentryで。`;
   try{
-    const res = await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:p}] })
-    });
-    const d = await res.json();
-    const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
-    const parsed = JSON.parse(raw);
-    liveResults.entries.push(...(parsed.entries||[]).map(e=>({...e, ts:Date.now()})));
-  }catch(e){ console.error('parseText',e); }
+    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2000,messages:[{role:'user',content:p}]})});
+    const d=await res.json();
+    const raw=d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+    const parsed=JSON.parse(raw);
+    liveResults.entries.push(...(parsed.entries||[]).map(e=>({...e,ts:Date.now()})));
+  }catch(e){console.error('parseText',e);}
 }
 
-async function analyzePhoto(type, b64){
-  const result = await analyzeImageWithAI(type, b64);
-  if(!result) return;
+async function analyzePhoto(type,b64){
+  const result=await analyzeImageWithAI(type,b64);
+  if(!result)return;
   if(type==='receipt'){
-    try{
-      const parsed = JSON.parse(result);
-      liveResults.photos.push({ type:'receipt', text:`${parsed.store||'店名不明'} — ¥${(parsed.total||0).toLocaleString()} (${parsed.category||'その他'})` });
-      if(parsed.total) liveResults.entries.push({ category:'finance', summary:`支出 ¥${parsed.total.toLocaleString()} ${parsed.store||''}`, details:{ transaction_type:'expense', amount:parsed.total, label:`${parsed.store||''}(${parsed.category||''})` }, ts:Date.now() });
-    }catch{ liveResults.photos.push({ type:'receipt', text:result }); }
+    try{const p=JSON.parse(result);liveResults.photos.push({type:'receipt',text:`${p.store||'店名不明'} — ¥${(p.total||0).toLocaleString()} (${p.category||'その他'})`});if(p.total)liveResults.entries.push({category:'finance',summary:`支出 ¥${p.total.toLocaleString()} ${p.store||''}`,details:{transaction_type:'expense',amount:p.total,label:`${p.store||''}(${p.category||''})`},ts:Date.now()});}
+    catch{liveResults.photos.push({type:'receipt',text:result});}
   } else {
-    liveResults.photos.push({ type, text:result });
-    liveResults.entries.push({ category:type, summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`, details:{ ai_result:result, photo_b64:b64 }, ts:Date.now() });
+    liveResults.photos.push({type,text:result});
+    liveResults.entries.push({category:type,summary:`${type==='skin'?'肌':'食事写真'}分析（AI判定済み）`,details:{ai_result:result,photo_b64:b64},ts:Date.now()});
   }
 }
 
@@ -973,37 +989,25 @@ function highlightMood(v){
 }
 
 // ════════════════════════
-// SAVE
+// SAVE (手動の「今日の記録を保存する」ボタン用)
 // ════════════════════════
 function saveToday(){
   const toSave = liveResults.entries;
   if(!toSave.length){ showToast('記録がありません'); return; }
   const targetDate = saveDate || todayKey;
-
-  // ★ 同日付がある場合は entries に追記（合流）
   const all = getAll();
-  const idx = all.findIndex(e => e.date === targetDate);
-  if(idx >= 0){
-    all[idx].entries = [...(all[idx].entries||[]), ...toSave];
-    if(selectedMood) all[idx].mood = selectedMood;
-    all[idx].ts = Date.now();
-  } else {
-    const newEntry = { date:targetDate, ts:Date.now(), entries:toSave };
-    if(selectedMood) newEntry.mood = selectedMood;
-    all.push(newEntry);
-  }
-  all.sort((a,b) => b.date.localeCompare(a.date));
-  S('kiroku_entries', all);
-  S('live_'+todayKey, {entries:[],photos:[]});
-  liveResults = {entries:[],photos:[]};
+  const idx = all.findIndex(d=>d.date===targetDate);
+  if(idx>=0){ all[idx].entries=[...(all[idx].entries||[]),...toSave]; if(selectedMood)all[idx].mood=selectedMood; all[idx].ts=Date.now(); }
+  else { const ne={date:targetDate,ts:Date.now(),entries:toSave}; if(selectedMood)ne.mood=selectedMood; all.push(ne); }
+  all.sort((a,b)=>b.date.localeCompare(a.date));
+  S('kiroku_entries',all);
+  S('live_'+todayKey,{entries:[],photos:[]});
+  liveResults={entries:[],photos:[]};
   refreshLive();
-  saveDate = todayKey;
-  const input = document.getElementById('save-date-input');
-  if(input) input.value = todayKey.replace(/\./g,'-');
-  const badge = document.getElementById('save-date-badge');
-  if(badge) badge.textContent = '今日';
-  const btn = document.getElementById('save-btn');
-  if(btn) btn.textContent = '今日の記録を保存する';
+  saveDate=todayKey;
+  const inp=document.getElementById('save-date-input'); if(inp)inp.value=todayKey.replace(/\./g,'-');
+  const badge=document.getElementById('save-date-badge'); if(badge)badge.textContent='今日';
+  const btn=document.getElementById('save-btn'); if(btn)btn.textContent='今日の記録を保存する';
   showToast(`${targetDate} の記録を保存しました ✓`);
 }
 
@@ -1066,24 +1070,16 @@ function renderHistory(c){
   </div>` : '';
 
   c.innerHTML = streakBadge + all.slice(0,90).map((day, di) => {
-    // ③ 履歴表示時に 'other' カテゴリのエントリをキーワードで補正表示
-    const displayEntries = (day.entries||[]).map(e => {
-      if(e.category === 'other'){
-        const kw = autoCategory(e.details?.raw || e.summary || '');
-        return kw !== 'other' ? {...e, category:kw, _kwTagged:true} : e;
-      }
-      return e;
-    });
-    const sleepE = (displayEntries).find(e=>e.category==='sleep'&&e.details?.duration_h);
-    const finBal = (displayEntries).filter(e=>e.category==='finance').reduce((s,e)=>s+(e.details?.transaction_type==='income'?e.details?.amount||0:-(e.details?.amount||0)),0);
+    const sleepE = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+    const finBal = (day.entries||[]).filter(e=>e.category==='finance').reduce((s,e)=>s+(e.details?.transaction_type==='income'?e.details?.amount||0:-(e.details?.amount||0)),0);
     const mood = day.mood;
     const moodEmoji = mood ? ['','😞','😕','😐','🙂','😄'][mood] : '';
     const pills = [];
     if(sleepE) pills.push({t:`💤 ${sleepE.details.duration_h}h`, c:'sleep'});
-    if(displayEntries.some(e=>e.category==='meal')) pills.push({t:'🍱', c:'meal'});
-    if(displayEntries.some(e=>e.category==='skin')) pills.push({t:'✨', c:'skin'});
-    if(displayEntries.some(e=>e.category==='body')) pills.push({t:'🏃', c:'body'});
-    if(displayEntries.some(e=>e.category==='finance')) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
+    if(day.entries?.some(e=>e.category==='meal')) pills.push({t:'🍱', c:'meal'});
+    if(day.entries?.some(e=>e.category==='skin')) pills.push({t:'✨', c:'skin'});
+    if(day.entries?.some(e=>e.category==='body')) pills.push({t:'🏃', c:'body'});
+    if(day.entries?.some(e=>e.category==='finance')) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
     if(moodEmoji) pills.push({t:moodEmoji, c:'other'});
 
     return `<div class="day-card" id="dc${di}">
@@ -1092,13 +1088,13 @@ function renderHistory(c){
         <div class="day-pills">${pills.map(p=>`<span class="dp" style="${CAT_DP[p.c]||''}">${p.t}</span>`).join('')}</div>
       </div>
       <div class="day-body">
-        ${displayEntries.map((e,ei)=>`<div class="de" style="justify-content:space-between">
+        ${(day.entries||[]).map((e,ei)=>`<div class="de" style="justify-content:space-between">
           <div style="display:flex;align-items:flex-start;gap:8px;flex:1">
-            <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}" title="${e._kwTagged?'キーワードで自動分類':''}">${CAT_LBL[e.category]||e.category}${e._kwTagged?'＊':''}</span>
+            <span class="cat-pill ${CAT_CLS[e.category]||'cp-other'}">${CAT_LBL[e.category]||e.category}</span>
             <span class="de-txt">${e.summary}</span>
           </div>
           <div style="display:flex;gap:4px;flex-shrink:0;margin-left:8px">
-            ${(e.category==='other'||e._kwTagged)&&(e.details?.raw||e.summary) ? `<button onclick="reanalyzeEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font);white-space:nowrap">再解析</button>` : ''}
+            ${e.category==='other'&&e.details?.raw ? `<button onclick="reanalyzeEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font);white-space:nowrap">再解析</button>` : ''}
             <button onclick="editEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--blue-s);color:var(--blue-s);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">編集</button>
             <button onclick="deleteEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">削除</button>
           </div>
@@ -1459,6 +1455,130 @@ function buildMonthlyCards(){
 }
 
 // ════════════════════════
+// 数値抽出ユーティリティ（正規表現）
+// ════════════════════════
+function extractSleep(entry){
+  // details.duration_h が最優先
+  if(entry.details?.duration_h) return +entry.details.duration_h;
+  // テキストから「7時間」「7.5h」「7h」などを抽出
+  const t = entry.details?.raw || entry.summary || '';
+  const m = t.match(/(\d+(?:\.\d+)?)\s*(?:時間|h\b)/i);
+  return m ? +m[1] : null;
+}
+function extractProtein(entry){
+  if(entry.details?.protein_g) return +entry.details.protein_g;
+  const t = entry.details?.raw || entry.summary || '';
+  const m = t.match(/(?:たんぱく質|タンパク質|プロテイン|protein)[^\d]*(\d+(?:\.\d+)?)\s*g/i)
+         || t.match(/(\d+(?:\.\d+)?)\s*g\s*(?:のたんぱく質|のタンパク質)/i);
+  return m ? +m[1] : null;
+}
+function extractExercise(entry){
+  if(entry.details?.duration_min) return +entry.details.duration_min;
+  const t = entry.details?.raw || entry.summary || '';
+  const mMin = t.match(/(\d+)\s*分/);
+  const mH   = t.match(/(\d+(?:\.\d+)?)\s*時間/);
+  if(mH)  return +mH[1] * 60;
+  if(mMin) return +mMin[1];
+  return entry.category==='body' ? 30 : null; // 運動記録があれば30分と推定
+}
+function extractAmount(entry){
+  if(entry.details?.amount) return +entry.details.amount;
+  const t = entry.details?.raw || entry.summary || '';
+  const m = t.match(/(\d[\d,]*)\s*円/);
+  return m ? +m[1].replace(/,/g,'') : null;
+}
+
+// ━━ 期間スライスから集計 ━━
+function aggregateSlice(days){
+  let sleepH=0,sleepN=0,proteinG=0,exerciseMin=0,expenseYen=0,incomeYen=0;
+  days.forEach(day=>{
+    (day.entries||[]).forEach(e=>{
+      if(e.category==='sleep'){ const v=extractSleep(e); if(v){sleepH+=v;sleepN++;} }
+      if(e.category==='meal'){  const v=extractProtein(e); if(v) proteinG+=v; }
+      if(e.category==='body'){  const v=extractExercise(e); if(v) exerciseMin+=v; }
+      if(e.category==='finance'){
+        const v=extractAmount(e);
+        if(v){ if(e.details?.transaction_type==='income') incomeYen+=v; else expenseYen+=v; }
+      }
+    });
+  });
+  return { sleepH:Math.round(sleepH*10)/10, sleepN, avgSleep:sleepN?(Math.round(sleepH/sleepN*10)/10):null,
+           proteinG:Math.round(proteinG), exerciseMin, expenseYen, incomeYen };
+}
+
+function fmtMin(m){ return m>=60?`${Math.floor(m/60)}h${m%60?m%60+'m':''}`:`${m}m`; }
+
+function buildAggTable(label, agg){
+  const rows=[
+    ['😴 睡眠合計', agg.sleepH?`${agg.sleepH}h`:'—', agg.avgSleep?`平均 ${agg.avgSleep}h / 日`:''],
+    ['💪 タンパク質', agg.proteinG?`${agg.proteinG}g`:'—', '摂取合計'],
+    ['🏃 運動', agg.exerciseMin?fmtMin(agg.exerciseMin):'—', '合計時間'],
+    ['💴 支出', agg.expenseYen?`¥${agg.expenseYen.toLocaleString()}`:'—', agg.incomeYen?`収入 ¥${agg.incomeYen.toLocaleString()}`:''],
+  ];
+  return `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;overflow:hidden">
+    <div style="padding:11px 16px;background:var(--card2);border-bottom:1px solid var(--border);font-size:10px;color:var(--chalk3);letter-spacing:.12em">${label}</div>
+    <table class="stat-table">
+      <thead><tr><th>項目</th><th>合計</th><th>備考</th></tr></thead>
+      <tbody>${rows.map(([k,v,n])=>`<tr><td>${k}</td><td>${v}</td><td style="font-size:10px;color:var(--chalk3);text-align:right">${n}</td></tr>`).join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+function buildAggStats(){
+  const all = getAll();
+  if(!all.length) return '';
+
+  // ── 週次（直近7日）
+  const d7 = new Date(TODAY); d7.setDate(d7.getDate()-6);
+  const key7 = fmt(d7);
+  const week = all.filter(d=>d.date>=key7&&d.date<=todayKey);
+
+  // ── 月次（当月）
+  const ym = todayKey.slice(0,7);
+  const month = all.filter(d=>d.date.startsWith(ym));
+
+  // ── 先週
+  const pw0 = new Date(TODAY); pw0.setDate(pw0.getDate()-13);
+  const pw1 = new Date(TODAY); pw1.setDate(pw1.getDate()-7);
+  const prevWeek = all.filter(d=>d.date>=fmt(pw0)&&d.date<=fmt(pw1));
+
+  const wa=aggregateSlice(week), ma=aggregateSlice(month), pwa=aggregateSlice(prevWeek);
+
+  // 前週比
+  const diff = (cur,prev,unit)=>{
+    if(!prev||!cur) return '';
+    const d=Math.round((cur-prev)*10)/10;
+    const c=d>0?'var(--green-s)':d<0?'var(--red-s)':'var(--chalk3)';
+    return `<span style="font-size:10px;color:${c};margin-left:6px">${d>0?'+':''}${d}${unit} 前週比</span>`;
+  };
+
+  // 週次カードに前週比を付与
+  const weekRows=[
+    ['😴 睡眠合計', wa.sleepH?`${wa.sleepH}h`:'—', wa.avgSleep?`平均 ${wa.avgSleep}h / 日`:'', diff(wa.sleepH,pwa.sleepH,'h')],
+    ['💪 タンパク質', wa.proteinG?`${wa.proteinG}g`:'—', '摂取合計', diff(wa.proteinG,pwa.proteinG,'g')],
+    ['🏃 運動', wa.exerciseMin?fmtMin(wa.exerciseMin):'—', '合計時間',''],
+    ['💴 支出', wa.expenseYen?`¥${wa.expenseYen.toLocaleString()}`:'—', wa.incomeYen?`収入 ¥${wa.incomeYen.toLocaleString()}`:'', diff(wa.expenseYen,pwa.expenseYen,'円')],
+  ];
+  const weekHtml=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px;overflow:hidden">
+    <div style="padding:11px 16px;background:var(--card2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:10px;color:var(--chalk3);letter-spacing:.12em">📅 今週の集計（直近7日）</span>
+      <span style="font-size:9px;color:var(--chalk4);font-family:var(--mono)">${key7.slice(5)} – ${todayKey.slice(5)}</span>
+    </div>
+    <table class="stat-table">
+      <thead><tr><th>項目</th><th>合計</th><th colspan="2">備考</th></tr></thead>
+      <tbody>${weekRows.map(([k,v,n,diff])=>`<tr><td>${k}</td><td>${v}${diff}</td><td colspan="2" style="font-size:10px;color:var(--chalk3);text-align:right">${n}</td></tr>`).join('')}</tbody>
+    </table>
+  </div>`;
+
+  const [y,m2]=ym.split('.');
+  return `<div style="margin-bottom:14px">
+    <div style="font-size:10px;color:var(--chalk3);letter-spacing:.12em;margin-bottom:8px">📊 数値集計レポート</div>
+    ${weekHtml}
+    ${buildAggTable(`🗓 ${y}年${parseInt(m2)}月の集計`, ma)}
+  </div>`;
+}
+
+// ════════════════════════
 // REPORT
 // ════════════════════════
 const PERIODS = [{l:'7日',d:7},{l:'30日',d:30},{l:'90日',d:90},{l:'半年',d:180},{l:'1年',d:365},{l:'全期間',d:99999}];
@@ -1490,6 +1610,7 @@ function renderReport(c){
 
   c.innerHTML = `
     <div class="period-tabs">${btns}</div>
+    ${buildAggStats()}
     ${slice.length>=2 ? buildCharts(slice) : ''}
     ${buildSleepConditionTable()}
     ${buildHabitRates()}
