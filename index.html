@@ -312,14 +312,22 @@ body::after {
 .stat-table tr:last-child td { border-bottom:none; }
 
 /* ── HISTORY ENTRY: サムネイル＋アコーディオン ── */
-.he-raw {
-  font-size:12px; color:var(--chalk2); line-height:1.75;
-  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
-  overflow:hidden; word-break:break-all; margin-top:4px;
+/* テキストは1つの .he-body div のみに存在する。
+   閉じた状態: -webkit-line-clamp で3行省略
+   開いた状態: clamp解除して全文 + AI分析を表示          */
+.he-body {
+  font-size:12px; color:var(--chalk2); line-height:1.8;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;
+  overflow:hidden; word-break:break-all;
+  white-space:pre-wrap; margin-top:5px;
 }
-.he-full { display:none; margin-top:8px; }
-.he-open .he-raw  { -webkit-line-clamp:unset; overflow:visible; }
-.he-open .he-full { display:block; }
+.he-open .he-body {
+  display:block;          /* -webkit-box を解除 */
+  overflow:visible;
+  -webkit-line-clamp:unset;
+}
+.he-ai-wrap { display:none; margin-top:8px; }
+.he-open .he-ai-wrap { display:block; }
 .he-toggle {
   font-size:9px; color:var(--chalk3); background:none; border:none;
   cursor:pointer; padding:4px 0; font-family:var(--font); letter-spacing:.05em;
@@ -413,12 +421,11 @@ migrateOldData();
 // べき等実装。バージョン番号を上げると次回起動時に再適用。
 // ════════════════════════════════════════════════════
 function migrateData(){
-  const DATA_VERSION = 4;  // v4: 正規表現ベースのカテゴリルールに移行
+  const DATA_VERSION = 5;  // v5: parseSleepTimes で既存データの睡眠時間を再抽出
   if(L('kiroku_migration_ver',0) >= DATA_VERSION) return;
 
-  // マイグレーション用ルール（KEYWORD_RULES 定義前なので独立定義）
   const MIG = [
-    { cat:'sleep',   re:/睡眠|起床|就寝|入眠|寝た|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠/ },
+    { cat:'sleep',   re:/睡眠|起床|就寝|入眠|寝た|寝付|眠り|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|ベッド|布団|起きた|pm.*起|am.*眠|眠りにつ|寝落ち|目が覚/ },
     { cat:'meal',    re:/食事|食べ|朝食|昼食|夕食|ご飯|焼肉|ハラミ|カルビ|豆腐|冷奴|納豆|ヨーグルト|サラダ|タンパク質|たんぱく質|プロテイン|カロリー|ランチ|ディナー/ },
     { cat:'skin',    re:/肌荒れ|肌の調子|ニキビ|乾燥肌|脂っぽ|毛穴|保湿|スキンケア|洗顔|赤み|くすみ/ },
     { cat:'body',    re:/運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|体重測定/ },
@@ -430,26 +437,46 @@ function migrateData(){
     (day.entries||[]).forEach(e => {
       const t = e.details?.raw || e.summary || '';
 
-      // パッチ1: categories 配列を最新ルールで再付与
+      // パッチ1: categories を最新ルールで再付与
       const cats = MIG.filter(r=>r.re.test(t)).map(r=>r.cat);
       const newCats = cats.length ? cats : ['other'];
       if(JSON.stringify(e.categories) !== JSON.stringify(newCats)){
-        e.categories = newCats;
-        e.category   = newCats[0];
-        changed = true;
+        e.categories = newCats; e.category = newCats[0]; changed = true;
       }
 
-      // パッチ2: details.raw 補完
+      // パッチ2: 睡眠エントリで duration_h が未設定なら parseSleepTimes で再計算
+      if(e.category === 'sleep' && !e.details?.duration_h && t){
+        const parsed = parseSleepTimes(t);
+        if(parsed){
+          if(!e.details) e.details = {};
+          e.details.duration_h = parsed.duration_h;
+          e.details.bed_time   = e.details.bed_time  || parsed.bed_time;
+          e.details.wake_time  = e.details.wake_time || parsed.wake_time;
+          changed = true;
+        }
+      }
+
+      // パッチ3: 食事エントリで protein_g が未設定なら estimateNutrition で推定
+      if(e.category === 'meal' && !e.details?.protein_g && t){
+        const nutr = estimateNutrition(t);
+        if(nutr.p > 0){
+          if(!e.details) e.details = {};
+          e.details.protein_g = nutr.p;
+          changed = true;
+        }
+      }
+
+      // パッチ4: details.raw 補完
       if(e.details && !e.details.raw && e.summary){ e.details.raw = e.summary; changed=true; }
-      // パッチ3: ts 補完
+      // パッチ5: ts 補完
       if(!e.ts){ e.ts = new Date(day.date.replace(/\./g,'-')).getTime()||Date.now(); changed=true; }
-      // パッチ4: _pending_ai フラグ残骸を削除
+      // パッチ6: _pending_ai フラグ残骸を削除
       if(e.details?._pending_ai){ delete e.details._pending_ai; changed=true; }
     });
   });
   if(changed) S('kiroku_entries', all);
   S('kiroku_migration_ver', DATA_VERSION);
-  console.log('[kiroku] migration v4 applied');
+  console.log('[kiroku] migration v5 applied');
 }
 
 migrateData();          // ← 新：カテゴリ再付与など最新ロジックをまとめて適用
@@ -794,20 +821,20 @@ function detectDateFromText(text){
 // ルール: 短い汎用語（朝・起き・肉 etc）は単独使用しない。
 //        より長い・明確なキーワードのみで判定する。
 // ════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════
+// キーワード → 複数カテゴリ自動付与（相互干渉防止版）
+// ════════════════════════════════════════════════════
 const KEYWORD_RULES = [
   { cat:'sleep',
-    // 「起き」単体は食事文脈でも出るので除外。明確な睡眠語のみ
-    re: /睡眠|起床|就寝|入眠|寝た|寝付|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|起きた時間|ベッドに入/ },
+    re: /睡眠|起床|就寝|入眠|寝た|寝付|眠り|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|ベッド|布団|眠りにつ|寝落ち|目を覚|起きた時|時に起き/ },
   { cat:'meal',
-    // 「肉」単体は誤認しやすいので「焼肉・肉じゃが」等の複合語か食事文脈で判定
-    re: /食事|食べ|朝食|昼食|夕食|ご飯|パン|麺類|うどん|そば|パスタ|ラーメン|焼肉|肉じゃが|ハラミ|カルビ|豚カツ|唐揚げ|魚料理|刺身|豆腐|冷奴|納豆|卵料理|鶏むね|鶏もも|野菜炒め|サラダ|味噌汁|ヨーグルト|スープ|ランチ|ディナー|朝ごはん|昼ごはん|夕ごはん|カロリー|タンパク質|たんぱく質|プロテイン|栄養/ },
+    re: /食事|食べ|朝食|昼食|夕食|ご飯|焼肉|ハラミ|カルビ|豚カツ|唐揚げ|豆腐|冷奴|納豆|鶏むね|鶏もも|サラダ|味噌汁|ヨーグルト|ランチ|ディナー|朝ごはん|昼ごはん|夕ごはん|タンパク質|たんぱく質|プロテイン/ },
   { cat:'skin',
     re: /肌荒れ|肌の調子|ニキビ|乾燥肌|脂っぽ|毛穴|保湿|スキンケア|洗顔|赤み|くすみ|化粧水|肌が/ },
   { cat:'body',
-    re: /運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|腹筋|プッシュアップ|散歩した|体重測定|体脂肪/ },
+    re: /運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|腹筋|散歩した|体重測定|体脂肪/ },
   { cat:'finance',
-    // 「円」単体は住所（〇〇円山）等でも出るので「○○円」の数字付きパターンに限定
-    re: /\d+円|支出|収入|購入|交通費|食費|日用品費|支払い|給料|節約|出費|レシート|領収書|コンビニで|スーパーで/ },
+    re: /\d+円|支出|収入|交通費|食費|支払い|給料|節約|出費|レシート|コンビニで|スーパーで/ },
 ];
 
 // 複数カテゴリをすべて返す（配列）
@@ -823,119 +850,207 @@ function autoCategories(text){
 function autoCategory(text){ return autoCategories(text)[0]; }
 
 // ════════════════════════════════════════════════════
-// ダミーAI：コンテキスト比較コメント生成
+// 睡眠時間抽出エンジン（曖昧テキスト対応）
+// 例: "am 4半に眠りにつきPm13時過ぎ起きた" → { bed:4.5, wake:13.0, duration:8.5 }
 // ════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════
-// AI フィードバック生成
-// 要件: オウム返し禁止・専門家口調・過去データ比較
+// 睡眠時間抽出エンジン v2（要件通りの実装）
+// 「Am 5時前に入眠し Am 11時ごろに目を覚ました」→ 6h
 // ════════════════════════════════════════════════════
-function generateAIResponse(text){
+function calculateSleepDuration(text){
+  if(!text) return null;
+  // 全角→半角、大文字→小文字に正規化
+  const t = text
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[：]/g, ':');
+
+  // 「半」を30分相当として前処理（例: "5時半" → "5時30分"）
+  const normalized = t.replace(/(\d{1,2})\s*時半/g, '$1時30分');
+
+  // AM/PM を考慮した時刻→10進数変換
+  function toH(hour, min, ampm){
+    let h = parseInt(hour), m = parseInt(min||0);
+    const ap = (ampm||'').toLowerCase().replace(/\s/g,'');
+    if(ap === 'pm' && h < 12) h += 12;
+    if(ap === 'am' && h === 12) h = 0;
+    return h + m / 60;
+  }
+
+  // 入眠時刻の抽出（入眠コンテキストが後ろに来るパターンに対応）
+  // 例: "Am 5時前に入眠" / "am5時ごろ寝た" / "11時半に眠りについた"
+  const sleepMatch = normalized.match(
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:入眠|寝|眠り|眠|ベッド|布団|就寝|寝付)/i
+  );
+
+  // 起床時刻の抽出（起床コンテキストが後ろに来るパターンに対応）
+  // 例: "Am 11時ごろに目を覚ました" / "7時に起きた" / "pm1時過ぎに起床"
+  const wakeMatch = normalized.match(
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚|目を覚|起き上)/i
+  );
+
+  if(!sleepMatch || !wakeMatch) return null;
+
+  let sleepH = toH(sleepMatch[2], sleepMatch[3], sleepMatch[1]);
+  let wakeH  = toH(wakeMatch[2],  wakeMatch[3],  wakeMatch[1]);
+
+  // AM/PM 未記載で sleepH > wakeH の場合 → 日またぎと判定（wakeH += 24）
+  if(sleepH > wakeH) wakeH += 24;
+
+  const duration = Math.round((wakeH - sleepH) * 10) / 10;
+  if(duration <= 0 || duration > 16) return null;
+
+  // HH:MM 文字列
+  const toHHMM = h => {
+    const hh = Math.floor(h % 24);
+    const mm = Math.round((h % 1) * 60);
+    return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+  };
+
+  return {
+    bed_time:   toHHMM(sleepH),
+    wake_time:  toHHMM(wakeH % 24),
+    duration_h: duration,
+  };
+}
+
+// 旧名互換（内部で calculateSleepDuration を呼ぶ）
+function parseSleepTimes(text){ return calculateSleepDuration(text); }
+
+// ════════════════════════════════════════════════════
+// AI フィードバック生成 v3
+// ・historyData: 過去データ配列（省略時は localStorage から取得）
+// ・睡眠：前日比較、マウスピース影響
+// ・食事：タンパク質・脂質・糖質の推定値
+// ・要件通りの専門的コメントを出力
+// ════════════════════════════════════════════════════
+
+// 食材 → 栄養素推定テーブル（g: タンパク質, f: 脂質, c: 糖質）
+const NUTRITION_DB = {
+  ハラミ:    {p:22,f:18,c:0},  カルビ:    {p:18,f:22,c:0},
+  鶏むね:    {p:24,f:2,c:0},   鶏もも:    {p:20,f:8,c:0},
+  豚カツ:    {p:22,f:20,c:15}, 唐揚げ:    {p:20,f:15,c:12},
+  焼肉:      {p:20,f:16,c:0},  牛肉:      {p:20,f:14,c:0},
+  豚肉:      {p:18,f:14,c:0},  鶏肉:      {p:22,f:5,c:0},
+  魚:        {p:20,f:5,c:0},   刺身:      {p:20,f:3,c:0},
+  卵:        {p:6,f:5,c:0},    卵料理:    {p:12,f:10,c:2},
+  豆腐:      {p:5,f:3,c:1},    冷奴:      {p:5,f:3,c:1},
+  納豆:      {p:7,f:4,c:4},    プロテイン:{p:25,f:2,c:5},
+  ご飯:      {p:3,f:0,c:55},   米:        {p:3,f:0,c:55},
+  パン:      {p:4,f:4,c:30},   うどん:    {p:3,f:1,c:55},
+  ラーメン:  {p:8,f:10,c:55},  パスタ:    {p:7,f:2,c:50},
+  サラダ:    {p:2,f:3,c:5},    野菜炒め:  {p:3,f:5,c:8},
+  味噌汁:    {p:3,f:1,c:3},    ヨーグルト:{p:4,f:3,c:8},
+};
+
+function estimateNutrition(text){
+  let p=0, f=0, c=0, matched=[];
+  for(const [food, n] of Object.entries(NUTRITION_DB)){
+    if(text.includes(food)){ p+=n.p; f+=n.f; c+=n.c; matched.push(food); }
+  }
+  // プロテイン数値が直書きされていれば優先
+  const proM = text.match(/(?:タンパク質|たんぱく質|プロテイン)\s*(\d+)\s*g/i);
+  if(proM) p = +proM[1];
+  return { p, f, c, matched };
+}
+
+function generateAIResponse(text, historyData){
   if(!text) return '';
-  const all    = getAll();
+  const all    = historyData || getAll();
   const recent = all.slice(0, 7);
   const parts  = [];
 
   // ── 睡眠専門家の分析
-  if(/睡眠|起床|就寝|入眠|寝た|眠剤|デエビゴ|マウスピース|中途覚醒|不眠/.test(text)){
-    const durM  = text.match(/(\d+(?:\.\d+)?)\s*時間/);
-    const dur   = durM ? +durM[1] : null;
-    const hasMed = /眠剤|デエビゴ/.test(text);
-    const hasMP  = /マウスピース/.test(text);
-    const prevH  = recent.find(d=>d.entries?.some(e=>e.category==='sleep'&&e.details?.duration_h))
-                         ?.entries?.find(e=>e.category==='sleep')?.details?.duration_h ?? null;
+  if(KEYWORD_RULES.find(r=>r.cat==='sleep')?.re.test(text)){
+    const parsed  = parseSleepTimes(text);
+    const dur     = parsed?.duration_h ?? (() => {
+      const m = text.match(/(\d+(?:\.\d+)?)\s*時間/); return m ? +m[1] : null;
+    })();
+    const hasMP   = /マウスピース/.test(text);
+    const hasMed  = /眠剤|デエビゴ/.test(text);
+    const prevDay = recent.find(d=>d.entries?.some(e=>e.category==='sleep'&&e.details?.duration_h));
+    const prevH   = prevDay?.entries?.find(e=>e.category==='sleep')?.details?.duration_h ?? null;
 
-    let msg = '【睡眠専門家の分析】\n';
-    if(hasMP){
-      msg += `マウスピース装着による開口で、睡眠中に乾燥や中途覚醒が起きやすい状態です。就寝前の水分補給と、起床時の疲労感チェックを習慣にしましょう。`;
-      if(hasMed) msg += `　眠剤（デエビゴ）との併用で入眠はスムーズでも、中途覚醒リスクがあります。`;
-      if(dur) msg += `　今夜は${dur}時間の睡眠。理想の7.5時間${dur>=7.5?'を達成！':'まであと'+(7.5-dur).toFixed(1)+'h。'}`;
-      msg += `　日中のパフォーマンス維持のため、疲労感が残る場合は短い仮眠（15〜20分）を活用しましょう。`;
-    } else if(hasMed){
-      msg += `眠剤使用の夜ですね。薬の効果と翌朝の疲労感を継続記録すると、最適な使用タイミングが見えてきます。`;
-      if(dur) msg += `　今夜の睡眠は${dur}時間。${dur<7?`理想より${(7.5-dur).toFixed(1)}時間短め。就寝を30分前倒しにする工夫が効果的です。`:'良好な睡眠時間が確保できています。'}`;
+    let msg = '【睡眠専門家の分析】\n記録を確認しました。';
+    if(dur !== null && prevH !== null){
+      msg += `前日は${prevH}時間でしたが、今回は${dur}時間ですね。`;
+      if(hasMP) msg += `マウスピース装着時の開口による影響も考慮し、睡眠の質に変化がないか注視しましょう。`;
+      if(dur < prevH) msg += `　睡眠時間がやや短くなっています。就寝時刻を30分前倒しにするだけで大きく改善できます。`;
+      else if(dur > prevH) msg += `　前日より改善できています、この調子で続けましょう！`;
     } else if(dur !== null){
-      if(dur < 6)        msg += `${dur}時間は慢性的な不足につながります。${prevH?`前日(${prevH}h)と比べても`:''}集中力・代謝への影響が出やすい水準です。就寝時刻を30分前倒しにするだけで改善できます。`;
-      else if(dur < 7.5) msg += `記録を確認しました。${dur}時間の睡眠。${prevH?`前日は${prevH}時間でした。`:''}7〜8時間を目標に、毎日同じ時刻に就寝するリズムが睡眠の質を高めます。`;
-      else               msg += `${dur}時間の理想的な睡眠が確保できています！${prevH?`前日(${prevH}h)と比べて安定したリズムが続いています。`:''}この調子で継続しましょう。`;
+      if(hasMP) msg += `マウスピース装着による開口で、睡眠の質が低下しやすい状態ですね。日中のパフォーマンス維持のため、起床時に少しでも疲労感があれば、昼間に短い仮眠（15〜20分）をとるなど工夫してみましょう。`;
+      if(dur < 6)        msg += `${dur}時間の睡眠は不足気味です。理想の7.5時間まであと${(7.5-dur).toFixed(1)}時間。就寝時刻の前倒しを習慣化しましょう。`;
+      else if(dur >= 7.5) msg += `${dur}時間の理想的な睡眠が確保できています！この調子を維持しましょう。`;
+      else               msg += `${dur}時間の睡眠を記録。引き続き入眠・起床時刻の記録でリズム分析ができます。`;
     } else {
-      msg += `睡眠記録を確認しました。${prevH?`直近の睡眠は${prevH}時間でした。`:''}入眠・起床時刻と中途覚醒の有無も記録すると睡眠スコアの精度が上がります。`;
+      msg += `${hasMP?'マウスピース装着による開口で、睡眠の質が低下しやすい状態ですね。日中のパフォーマンス維持のため、起床時に少しでも疲労感があれば、昼間に短い仮眠をとるなど工夫してみましょう。':'入眠・起床時刻も記録すると睡眠スコアの精度が上がります。'}`;
     }
+    if(hasMed && !hasMP) msg += `　眠剤の効果と翌朝の疲労感を継続記録すると、最適な使用タイミングが見えてきます。`;
     parts.push(msg);
   }
 
-  // ── 栄養士の分析
-  if(/食事|食べ|朝食|昼食|夕食|ご飯|焼肉|ハラミ|カルビ|肉じゃが|豆腐|冷奴|納豆|卵|鶏|野菜|サラダ|タンパク質|たんぱく質|プロテイン|米|パン|麺/.test(text)){
-    const hasProtein = /タンパク質|たんぱく質|プロテイン|ハラミ|カルビ|鶏|魚|卵|豆腐|冷奴|納豆/.test(text);
-    const hasFat     = /揚げ|カツ|フライ|バター|チーズ|マヨ|脂/.test(text);
-    const hasVeg     = /野菜|サラダ|ほうれん草|ブロッコリー|トマト/.test(text);
-    const hasYakini  = /焼肉|ハラミ|カルビ|焼き肉/.test(text);
-    const proM       = text.match(/(?:タンパク質|たんぱく質|プロテイン)\s*(\d+)\s*g/i);
-    const mealDays   = recent.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
+  // ── 栄養士の分析（タンパク質・脂質・糖質推定）
+  if(KEYWORD_RULES.find(r=>r.cat==='meal')?.re.test(text)){
+    const nutr = estimateNutrition(text);
+    const mealDays = recent.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
 
-    let msg = '【栄養士の分析】\n';
-    msg += `詳細な食事記録ありがとうございます。`;
-    if(hasYakini){
-      msg += `焼肉はタンパク質が豊富で筋肉量増加に最適なメニューです！脂質が多くなった場合は、次の食事で消化の良い和食（納豆・豆腐・味噌汁など）を取り入れると、胃腸への負担が減り、より完璧なボディメイクに繋がります。`;
-    } else if(hasProtein && hasVeg){
-      msg += `タンパク質と野菜のバランスが整った素晴らしい食事構成です！${proM?`タンパク質${proM[1]}g摂取と`:''}筋肉合成に理想的な組み合わせ。${mealDays>=3?`直近${mealDays}日継続記録中！`:''} 運動後30分以内にこのメニューが摂れると効果は最大です。`;
-    } else if(hasProtein && hasFat){
-      msg += `タンパク質はしっかり摂れていますが、脂質も高めです。次の食事ではベジファースト（野菜を先に食べる）を意識し、血糖値スパイクを抑えましょう。`;
-    } else if(hasProtein){
-      msg += `タンパク質源をしっかり摂れています。${!hasVeg?'ビタミン吸収を助けるため、緑黄色野菜（ほうれん草・ブロッコリー）を一品追加するとさらに完璧な栄養バランスになります。':'良いバランスです！'}`;
+    let msg = '【栄養士の分析】\n詳細な食事記録ありがとうございます。';
+    if(nutr.matched.length > 0){
+      msg += `筋肉量を増やすためのメニューとして、${nutr.matched.slice(0,3).join('・')}でタンパク質がしっかり確保されています。`;
+      if(nutr.p > 0 || nutr.f > 0 || nutr.c > 0){
+        msg += `\n推定栄養素: P（タンパク質）${nutr.p}g / F（脂質）${nutr.f}g / C（糖質）${nutr.c}g`;
+      }
+      if(nutr.f > 20) msg += `\n脂質がやや高めです。次の食事で消化の良い和食（豆腐・納豆・味噌汁）を取り入れると、胃腸への負担も減り、より完璧なボディメイクに繋がります。`;
+      else if(nutr.p >= 20) msg += `\nタンパク質量は良好です！運動後30分以内に摂取できると筋肉合成効率が高まります。`;
     } else {
-      msg += `炭水化物中心のメニューかもしれません。筋肉量維持のためにタンパク質（鶏むね肉・豆腐・卵など）をプラスすることをおすすめします。`;
+      msg += `主食・主菜・副菜を意識した食事は、栄養バランスを自然に整える基本です。${mealDays>=3?`直近${mealDays}日継続記録が続いています！`:''}`;
     }
     parts.push(msg);
   }
 
   // ── 運動分析
-  if(/運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|腹筋|プッシュアップ|散歩した/.test(text)){
-    const durM     = text.match(/(\d+)\s*分/);
-    const dur      = durM ? +durM[1] : null;
-    const typeM    = text.match(/筋トレ|ジョギング|ウォーキング|散歩|ランニング|ストレッチ|スクワット/);
-    const exDays   = recent.filter(d=>d.entries?.some(e=>e.category==='body')).length;
+  if(KEYWORD_RULES.find(r=>r.cat==='body')?.re.test(text)){
+    const durM   = text.match(/(\d+)\s*分/);
+    const dur    = durM ? +durM[1] : null;
+    const typeM  = text.match(/筋トレ|ジョギング|ウォーキング|散歩|ランニング|ジム|ストレッチ|スクワット/);
+    const exDays = recent.filter(d=>d.entries?.some(e=>e.category==='body')).length;
     let msg = '【トレーニングの分析】\n';
-    if(dur && dur >= 30) msg += `${typeM?typeM[0]:'運動'}${dur}分を記録。有酸素運動は20分超から脂肪燃焼モードに入るため、非常に効果的な時間です。${exDays>=3?`今週${exDays}日達成、週3回目標クリア！`:''}翌日のタンパク質補給を忘れずに。`;
-    else if(dur)         msg += `${dur}分の運動でも継続が大切です。${exDays>=2?`今週${exDays}日継続中。`:''}毎日少しずつ動く習慣がベースの体力を上げます。`;
-    else                 msg += `${typeM?typeM[0]:'運動'}を記録しました。${exDays>=3?`今週${exDays}日継続中！`:'週3回を目標に。'}睡眠・食事データとの組み合わせでコンディションの相関が見えてきます。`;
+    if(dur && dur >= 30) msg += `${typeM?typeM[0]:'運動'}${dur}分を記録。有酸素運動は20分超から脂肪燃焼モードになるため、非常に効果的です。${exDays>=3?`今週${exDays}日達成！`:''}`;
+    else msg += `${typeM?typeM[0]:'運動'}を記録。${exDays>=3?`今週${exDays}日継続中。`:'週3回を目標に。'}睡眠・食事データとの組み合わせでコンディションの相関が見えます。`;
     parts.push(msg);
   }
 
   // ── 収支分析
-  if(/\d+円|支出|収入|交通費|食費|支払い|給料|節約|出費|レシート/.test(text)){
-    const amtM   = text.match(/(\d[\d,]*)\s*円/);
-    const amt    = amtM ? +amtM[1].replace(/,/g,'') : null;
-    const isInc  = /収入|給料/.test(text);
-    const wkExp  = recent.reduce((s,d)=>s+(d.entries||[]).filter(e=>e.category==='finance'&&e.details?.transaction_type==='expense').reduce((ss,e)=>ss+(e.details?.amount||0),0),0);
+  if(KEYWORD_RULES.find(r=>r.cat==='finance')?.re.test(text)){
+    const amtM  = text.match(/(\d[\d,]*)\s*円/);
+    const amt   = amtM ? +amtM[1].replace(/,/g,'') : null;
+    const isInc = /収入|給料/.test(text);
+    const wkExp = recent.reduce((s,d)=>s+(d.entries||[]).filter(e=>e.category==='finance'&&e.details?.transaction_type==='expense').reduce((ss,e)=>ss+(e.details?.amount||0),0),0);
     let msg = '【収支の分析】\n';
-    if(isInc && amt)    msg += `収入${amt.toLocaleString()}円を記録。収入・支出の両方を記録することで月末の収支バランスが可視化されます。`;
-    else if(amt)        msg += `${amt.toLocaleString()}円の支出を記録。今週の累計支出は${(wkExp+amt).toLocaleString()}円になります。${amt>10000?'大きめの出費ですね。カテゴリ別に分けると削減ポイントが見えやすくなります。':'継続記録で月の支出パターンが掴めます。'}`;
-    else                msg += `収支を記録しました。${wkExp?`今週の累計支出は約${wkExp.toLocaleString()}円です。`:''}金額も合わせて記録すると週・月の支出パターン分析ができます。`;
+    if(isInc && amt) msg += `収入${amt.toLocaleString()}円を記録。収入・支出を両方記録することで月末の収支バランスが可視化されます。`;
+    else if(amt) msg += `${amt.toLocaleString()}円の支出。今週の累計支出は${(wkExp+amt).toLocaleString()}円です。${amt>10000?'大きな支出ですね。カテゴリ別に記録すると削減ポイントが見えます。':'継続記録で月の支出パターンが把握できます。'}`;
+    else msg += `収支を記録しました。${wkExp?`今週の累計支出は約${wkExp.toLocaleString()}円です。`:''}金額も入力すると週・月の支出パターン分析ができます。`;
     parts.push(msg);
   }
 
   // ── 肌分析
-  if(/肌荒れ|肌の調子|ニキビ|乾燥肌|脂っぽ|毛穴|保湿|スキンケア|洗顔|赤み|くすみ|肌が/.test(text)){
-    const hasDry  = /乾燥/.test(text);
-    const hasAcne = /ニキビ/.test(text);
+  if(KEYWORD_RULES.find(r=>r.cat==='skin')?.re.test(text)){
+    const hasDry  = /乾燥/.test(text), hasAcne = /ニキビ/.test(text);
     let msg = '【肌専門家の分析】\n';
-    if(hasDry && hasAcne) msg += `乾燥とニキビが同時発生している場合、インナードライ（内部乾燥）の可能性があります。過剰な皮脂分泌で毛穴が詰まりやすい状態です。セラミド配合の保湿剤で徹底保湿しながら、低刺激のノンコメドジェニック製品を選びましょう。`;
-    else if(hasDry)       msg += `乾燥が気になっているようですね。睡眠不足・水分不足・洗顔後の保湿不足が主な原因です。睡眠記録と照らし合わせて、睡眠時間が短い日に乾燥しやすいか確認してみましょう。`;
-    else if(hasAcne)      msg += `ニキビは食事・睡眠・ストレスの影響を受けます。糖質・脂質の多い食事や睡眠不足が悪化させることが多いです。今日の食事・睡眠データと照らし合わせてパターンを探してみましょう。`;
-    else                  msg += `肌の状態を記録しました。継続記録で食事・睡眠との相関が見えてきます。写真も保存すると経過比較が可能です。`;
+    if(hasDry && hasAcne) msg += `乾燥とニキビが同時発生はインナードライの可能性あり。セラミド配合の保湿剤で徹底保湿しつつ、ノンコメドジェニック製品を選びましょう。`;
+    else if(hasDry) msg += `乾燥は睡眠不足・水分不足が原因になりやすいです。睡眠記録と照らし合わせて相関を確認してみましょう。`;
+    else if(hasAcne) msg += `ニキビは食事・睡眠・ストレスの影響を受けます。今日の食事・睡眠データと照らし合わせてパターンを探してみましょう。`;
+    else msg += `肌の状態を記録しました。継続記録で食事・睡眠との相関が見えてきます。`;
     parts.push(msg);
   }
 
   if(parts.length === 0){
     parts.push('【AI分析】記録を保存しました。この調子で日々のデータを蓄積していきましょう！');
   }
-
   return parts.join('\n\n');
 }
 
-// 旧名との互換
+// 旧名互換
 function dummyAIComment(text){ return generateAIResponse(text); }
-  const all = getAll();
 
 // ════════════════════════════════════════════════════
 // テキスト解析：複数カテゴリのエントリ配列を返す
@@ -957,12 +1072,21 @@ function parseTextLocal(text){
     let summary = '';  // summary は数値・識別子のみ。表示には使わない
 
     if(cat === 'sleep'){
-      const durM  = text.match(/(\d+(?:\.\d+)?)\s*時間/);
-      const bedM  = text.match(/(?:入眠|就寝|寝た)[^\d]*(\d{1,2})[時:：](\d{0,2})/);
-      const wakeM = text.match(/(?:起床|起きた時間)[^\d]*(\d{1,2})[時:：](\d{0,2})/);
-      if(durM)  details.duration_h  = +durM[1];
-      if(bedM)  details.bed_time    = `${bedM[1].padStart(2,'0')}:${(bedM[2]||'00').padStart(2,'0')}`;
-      if(wakeM) details.wake_time   = `${wakeM[1].padStart(2,'0')}:${(wakeM[2]||'00').padStart(2,'0')}`;
+      // まず parseSleepTimes で曖昧テキストから時刻・時間を抽出
+      const parsed = parseSleepTimes(text);
+      if(parsed){
+        details.duration_h = parsed.duration_h;
+        details.bed_time   = parsed.bed_time;
+        details.wake_time  = parsed.wake_time;
+      } else {
+        // フォールバック: 「7時間」などの直書きパターン
+        const durM  = text.match(/(\d+(?:\.\d+)?)\s*時間/);
+        const bedM  = text.match(/(?:入眠|就寝|寝た)[^\d]*(\d{1,2})[時:：](\d{0,2})/);
+        const wakeM = text.match(/(?:起床|起きた)[^\d]*(\d{1,2})[時:：](\d{0,2})/);
+        if(durM)  details.duration_h = +durM[1];
+        if(bedM)  details.bed_time   = `${bedM[1].padStart(2,'0')}:${(bedM[2]||'00').padStart(2,'0')}`;
+        if(wakeM) details.wake_time  = `${wakeM[1].padStart(2,'0')}:${(wakeM[2]||'00').padStart(2,'0')}`;
+      }
       details.medication = /眠剤|デエビゴ/.test(text);
       details.mouthpiece = /マウスピース/.test(text);
       // summary = 識別子のみ（生テキストを含まない）
@@ -979,11 +1103,16 @@ function parseTextLocal(text){
       const proM  = text.match(/(?:タンパク質|たんぱく質|プロテイン)\s*(\d+)\s*g/i);
       const typeM = text.match(/朝食|昼食|夕食|間食|朝ごはん|昼ごはん|夕ごはん/);
       if(calM)  details.calories_est = +calM[1];
-      if(proM)  details.protein_g    = +proM[1];
       if(typeM) details.meal_type    = typeM[0];
+      // 栄養素推定（食材辞書ベース）
+      const nutr = estimateNutrition(text);
+      details.protein_g = proM ? +proM[1] : (nutr.p || null);
+      details.fat_g     = nutr.f || null;
+      details.carbs_g   = nutr.c || null;
       const parts = [];
       if(details.meal_type)    parts.push(details.meal_type);
       if(details.protein_g)    parts.push(`P:${details.protein_g}g`);
+      if(details.fat_g)        parts.push(`F:${details.fat_g}g`);
       if(details.calories_est) parts.push(`${details.calories_est}kcal`);
       summary = parts.length ? parts.join(' ') : '食事';
     }
@@ -1368,12 +1497,11 @@ function renderHistory(c){
                 <button onclick="deleteEntry('${day.date}',${ei})" style="padding:3px 8px;background:none;border:1px solid var(--border2);color:var(--chalk3);font-size:9px;cursor:pointer;border-radius:12px;font-family:var(--font)">削除</button>
               </div>
             </div>
-            <!-- サムネイル：生テキストを2行で省略表示 -->
-            <div class="he-raw">${rawText || e.summary}</div>
-            <!-- アコーディオン：タップで全文＋AIコメントを展開 -->
-            <div class="he-full">
-              <div style="font-size:12px;color:var(--chalk);line-height:1.8;white-space:pre-wrap;padding:6px 0">${rawText}</div>
-              ${aiComment ? `<div class="he-ai"><div class="he-ai-label">✦ AI分析</div>${aiComment}</div>` : ''}
+            <!-- テキストは .he-body 1つだけ。CSS clamp で開閉を制御 -->
+            <div class="he-body">${rawText || e.summary}</div>
+            <!-- AI分析は展開時のみ表示 -->
+            <div class="he-ai-wrap">
+              ${aiComment ? `<div class="he-ai"><div class="he-ai-label">✦ AI分析</div>${aiComment}</div>` : '<div style="font-size:10px;color:var(--chalk4);padding:6px 0">AI分析なし（解析ボタンを使うと生成されます）</div>'}
             </div>
             <button class="he-toggle" onclick="document.getElementById('${entryId}').classList.toggle('he-open');this.textContent=document.getElementById('${entryId}').classList.contains('he-open')?'▲ 閉じる':'▼ 全文・AI分析を見る'">▼ 全文・AI分析を見る</button>
           </div>`;}).join('')}
@@ -1743,6 +1871,89 @@ function buildMonthlyCards(){
 // ════════════════════════
 const PERIODS = [{l:'7日',d:7},{l:'30日',d:30},{l:'90日',d:90},{l:'半年',d:180},{l:'1年',d:365},{l:'全期間',d:99999}];
 
+// ── 週次集計サマリーカード（7日間の平均睡眠・タンパク質合計など）
+function buildWeeklySummary(){
+  const all = getAll();
+  if(!all.length) return '';
+
+  // 直近7日のデータを日付キーで絞り込む
+  const d7ago = new Date(TODAY); d7ago.setDate(d7ago.getDate()-6);
+  const key7  = fmt(d7ago);
+  const week7 = all.filter(d => d.date >= key7 && d.date <= todayKey);
+
+  // 先週（7〜14日前）
+  const d14ago = new Date(TODAY); d14ago.setDate(d14ago.getDate()-13);
+  const key14  = fmt(d14ago);
+  const week14 = all.filter(d => d.date >= key14 && d.date < key7);
+
+  function calcWeek(days){
+    const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='sleep'&&e.details?.duration_h);
+    const mealEntries  = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+    const bodyEntries  = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='body');
+    const finEntries   = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='finance'&&e.details?.transaction_type==='expense');
+
+    // 平均睡眠（h）
+    const avgSleep = sleepEntries.length
+      ? Math.round(sleepEntries.reduce((s,e)=>s+e.details.duration_h,0)/sleepEntries.length*10)/10 : null;
+    // 睡眠合計（h）
+    const totalSleep = sleepEntries.length
+      ? Math.round(sleepEntries.reduce((s,e)=>s+e.details.duration_h,0)*10)/10 : null;
+    // タンパク質合計（g）- details.protein_g または estimateNutrition から
+    const totalProtein = mealEntries.reduce((s,e)=>{
+      if(e.details?.protein_g) return s + e.details.protein_g;
+      const nutr = estimateNutrition(e.details?.raw||e.summary||'');
+      return s + nutr.p;
+    }, 0);
+    // 運動回数・合計時間
+    const exCount = bodyEntries.length;
+    const exMin   = bodyEntries.reduce((s,e)=>s+(e.details?.duration_min||0),0);
+    // 支出合計
+    const totalExp = finEntries.reduce((s,e)=>s+(e.details?.amount||0),0);
+
+    return { avgSleep, totalSleep, totalProtein: Math.round(totalProtein), exCount, exMin, totalExp, recordDays: days.length };
+  }
+
+  const cur  = calcWeek(week7);
+  const prev = calcWeek(week14);
+
+  // 前週比表示ヘルパー
+  const diff = (cv, pv, unit, invert=false) => {
+    if(cv===null||pv===null||pv===0) return '';
+    const d = Math.round((cv-pv)*10)/10;
+    const good = invert ? d<0 : d>0;
+    const c = good ? 'var(--green-s)' : d===0 ? 'var(--chalk3)' : 'var(--red-s)';
+    return `<span style="font-size:10px;color:${c};margin-left:5px">${d>0?'+':''}${d}${unit}</span>`;
+  };
+
+  const statRow = (icon, label, val, valStr, prevVal, unit, invert=false) =>
+    val===null ? '' : `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:12px;color:var(--chalk2)">${icon} ${label}</span>
+      <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--accent3)">${valStr}${diff(val,prevVal,unit,invert)}</span>
+    </div>`;
+
+  const rows = [
+    statRow('💤','平均睡眠時間', cur.avgSleep,   `${cur.avgSleep}h`,    prev.avgSleep,   'h'),
+    statRow('💤','睡眠合計',     cur.totalSleep, `${cur.totalSleep}h`,  prev.totalSleep, 'h'),
+    cur.totalProtein>0 ? statRow('💪','タンパク質合計', cur.totalProtein, `${cur.totalProtein}g`, prev.totalProtein, 'g') : '',
+    cur.exCount>0 ? statRow('🏃','運動回数',     cur.exCount, `${cur.exCount}回${cur.exMin?` / ${cur.exMin}分`:''}`, prev.exCount, '回') : '',
+    cur.totalExp>0 ? statRow('💴','支出合計', cur.totalExp, `¥${cur.totalExp.toLocaleString()}`, prev.totalExp, '円', true) : '',
+  ].filter(Boolean).join('');
+
+  if(!rows) return '';
+
+  const [y,m,d] = todayKey.split('.');
+  const fromStr = `${key7.slice(5).replace('.',  '/')} 〜 ${todayKey.slice(5).replace('.','/')}`;
+
+  return `<div class="chart-card" style="margin-bottom:14px">
+    <div class="chart-head" style="display:flex;justify-content:space-between;align-items:center">
+      <span>📊 直近1週間の集計</span>
+      <span style="font-size:9px;color:var(--chalk4);font-family:var(--mono)">${fromStr}（${cur.recordDays}日分）</span>
+    </div>
+    <div style="padding:0 4px">${rows}</div>
+    ${prev.recordDays>0?`<div style="padding:8px 4px 2px;font-size:9px;color:var(--chalk4)">カッコ内は前週比</div>`:''}
+  </div>`;
+}
+
 function renderReport(c){
   const all = getAll();
   const slice = all.slice(0, analysisPeriod===99999?all.length:analysisPeriod).reverse();
@@ -1770,6 +1981,7 @@ function renderReport(c){
 
   c.innerHTML = `
     <div class="period-tabs">${btns}</div>
+    ${buildWeeklySummary()}
     ${slice.length>=2 ? buildCharts(slice) : ''}
     ${buildSleepConditionTable()}
     ${buildHabitRates()}
