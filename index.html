@@ -146,8 +146,8 @@ body::after {
 .photo-slot.has .ps-rm { display:flex; }
 
 /* Transcript */
-.ta-wrap { margin-top:12px; display:none; }
-.ta-wrap.show { display:block; }
+.ta-wrap { margin-top:12px; display:block; }
+.ta-wrap.hide { display:none; }
 .ta {
   width:100%; min-height:64px; background:var(--bg2); border:1px solid var(--border2);
   border-radius:var(--r2); color:var(--chalk); font-family:var(--font);
@@ -744,7 +744,12 @@ function toggleVoice(){
 
 function clearInput(){
   const ta = document.getElementById('ta'); if(ta) ta.value='';
-  document.getElementById('ta-wrap')?.classList.remove('show');
+  // ta-wrap は非表示にしない（消すとAIで解析・保存ボタンがタップ不能になる）
+  // フィードバックパネルだけリセット
+  const fb = document.getElementById('ai-feedback');
+  if(fb){ fb.style.display='none'; fb.innerHTML=''; }
+  pendingEntries=[];
+  pendingAiComment='';
 }
 
 // ════════════════════════
