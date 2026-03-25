@@ -414,6 +414,35 @@ function migrateOldData(){
 migrateOldData();
 
 // ════════════════════════════════════════════════════
+// 栄養素推定テーブル＋関数（migrateDataより前に必須 - constはホイストされないため）
+// ════════════════════════════════════════════════════
+const NUTRITION_DB = {
+  ハラミ:    {p:22,f:18,c:0},  カルビ:    {p:18,f:22,c:0},
+  鶏むね:    {p:24,f:2,c:0},   鶏もも:    {p:20,f:8,c:0},
+  豚カツ:    {p:22,f:20,c:15}, 唐揚げ:    {p:20,f:15,c:12},
+  焼肉:      {p:20,f:16,c:0},  牛肉:      {p:20,f:14,c:0},
+  豚肉:      {p:18,f:14,c:0},  鶏肉:      {p:22,f:5,c:0},
+  魚:        {p:20,f:5,c:0},   刺身:      {p:20,f:3,c:0},
+  卵:        {p:6,f:5,c:0},    卵料理:    {p:12,f:10,c:2},
+  豆腐:      {p:5,f:3,c:1},    冷奴:      {p:5,f:3,c:1},
+  納豆:      {p:7,f:4,c:4},    プロテイン:{p:25,f:2,c:5},
+  ご飯:      {p:3,f:0,c:55},   米:        {p:3,f:0,c:55},
+  パン:      {p:4,f:4,c:30},   うどん:    {p:3,f:1,c:55},
+  ラーメン:  {p:8,f:10,c:55},  パスタ:    {p:7,f:2,c:50},
+  サラダ:    {p:2,f:3,c:5},    野菜炒め:  {p:3,f:5,c:8},
+  味噌汁:    {p:3,f:1,c:3},    ヨーグルト:{p:4,f:3,c:8},
+};
+function estimateNutrition(text){
+  let p=0, f=0, c=0, matched=[];
+  for(const [food, n] of Object.entries(NUTRITION_DB)){
+    if(text.includes(food)){ p+=n.p; f+=n.f; c+=n.c; matched.push(food); }
+  }
+  const proM = text.match(/(?:タンパク質|たんぱく質|プロテイン)\s*(\d+)\s*g/i);
+  if(proM) p = +proM[1];
+  return { p, f, c, matched };
+}
+
+// ════════════════════════════════════════════════════
 // DATA MIGRATION v2 — 旧データ構造を最新ロジックに合わせる
 // べき等実装。バージョン番号を上げると次回起動時に再適用。
 // ════════════════════════════════════════════════════
@@ -925,35 +954,6 @@ function parseSleepTimes(text){ return calculateSleepDuration(text); }
 // ・食事：タンパク質・脂質・糖質の推定値
 // ・要件通りの専門的コメントを出力
 // ════════════════════════════════════════════════════
-
-// 食材 → 栄養素推定テーブル（g: タンパク質, f: 脂質, c: 糖質）
-const NUTRITION_DB = {
-  ハラミ:    {p:22,f:18,c:0},  カルビ:    {p:18,f:22,c:0},
-  鶏むね:    {p:24,f:2,c:0},   鶏もも:    {p:20,f:8,c:0},
-  豚カツ:    {p:22,f:20,c:15}, 唐揚げ:    {p:20,f:15,c:12},
-  焼肉:      {p:20,f:16,c:0},  牛肉:      {p:20,f:14,c:0},
-  豚肉:      {p:18,f:14,c:0},  鶏肉:      {p:22,f:5,c:0},
-  魚:        {p:20,f:5,c:0},   刺身:      {p:20,f:3,c:0},
-  卵:        {p:6,f:5,c:0},    卵料理:    {p:12,f:10,c:2},
-  豆腐:      {p:5,f:3,c:1},    冷奴:      {p:5,f:3,c:1},
-  納豆:      {p:7,f:4,c:4},    プロテイン:{p:25,f:2,c:5},
-  ご飯:      {p:3,f:0,c:55},   米:        {p:3,f:0,c:55},
-  パン:      {p:4,f:4,c:30},   うどん:    {p:3,f:1,c:55},
-  ラーメン:  {p:8,f:10,c:55},  パスタ:    {p:7,f:2,c:50},
-  サラダ:    {p:2,f:3,c:5},    野菜炒め:  {p:3,f:5,c:8},
-  味噌汁:    {p:3,f:1,c:3},    ヨーグルト:{p:4,f:3,c:8},
-};
-
-function estimateNutrition(text){
-  let p=0, f=0, c=0, matched=[];
-  for(const [food, n] of Object.entries(NUTRITION_DB)){
-    if(text.includes(food)){ p+=n.p; f+=n.f; c+=n.c; matched.push(food); }
-  }
-  // プロテイン数値が直書きされていれば優先
-  const proM = text.match(/(?:タンパク質|たんぱく質|プロテイン)\s*(\d+)\s*g/i);
-  if(proM) p = +proM[1];
-  return { p, f, c, matched };
-}
 
 function generateAIResponse(text, historyData){
   if(!text) return '';
