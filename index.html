@@ -362,6 +362,39 @@ body::before {
       <input type="file" accept=".json" onchange="restoreBackup(this)" style="display:none">
     </label>
     <button class="backup-btn" onclick="doBackup()">💾 保存</button>
+    <button class="backup-btn" onclick="showFixPanel()" style="background:rgba(200,112,96,.2);border-color:var(--red-s);color:var(--red-s)">🛠 修正</button>
+  </div>
+</div>
+
+<!-- データ修正パネル -->
+<div id="fix-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9000;overflow-y:auto;padding:20px">
+  <div style="max-width:480px;margin:0 auto">
+    <div style="background:#2b342e;border:1px solid #3d4d42;border-radius:14px;padding:20px;margin-bottom:12px">
+      <div style="color:#f0d0a8;font-size:16px;font-weight:700;margin-bottom:6px">🛠 データ一括修正</div>
+      <div style="color:#6e8872;font-size:11px;margin-bottom:16px">このアプリ内のlocalStorageを直接修正します</div>
+
+      <div style="background:#1e2420;border:1px solid #3d4d42;border-radius:10px;padding:14px;margin-bottom:10px">
+        <div style="color:#d4b896;font-size:13px;font-weight:700;margin-bottom:6px">① 全睡眠エントリを眠剤あり＋MP着用に変更</div>
+        <div style="color:#6e8872;font-size:11px;margin-bottom:10px">すべての睡眠記録に medication:true・mouthpiece:true をセットします</div>
+        <button onclick="fixMedMP()" style="width:100%;padding:13px;background:#c4a070;color:#1e2420;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--font)">✦ 実行する</button>
+        <div id="fix-log1" style="margin-top:8px;font-size:11px;color:#b0c4b4;display:none;background:#1e2420;padding:10px;border-radius:6px;max-height:160px;overflow-y:auto;line-height:1.9"></div>
+      </div>
+
+      <div style="background:#1e2420;border:1px solid #3d4d42;border-radius:10px;padding:14px;margin-bottom:10px">
+        <div style="color:#d4b896;font-size:13px;font-weight:700;margin-bottom:6px">② 睡眠時間を入眠・起床テキストから再計算</div>
+        <div style="color:#6e8872;font-size:11px;margin-bottom:10px">「am5時に寝た」「pm13時に起きた」などのテキストから duration_h を自動計算します</div>
+        <button onclick="fixSleepDuration()" style="width:100%;padding:13px;background:#c4a070;color:#1e2420;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--font)">✦ 実行する</button>
+        <div id="fix-log2" style="margin-top:8px;font-size:11px;color:#b0c4b4;display:none;background:#1e2420;padding:10px;border-radius:6px;max-height:160px;overflow-y:auto;line-height:1.9"></div>
+      </div>
+
+      <div style="background:#1e2420;border:1px solid #3d4d42;border-radius:10px;padding:14px;margin-bottom:16px">
+        <div style="color:#d4b896;font-size:13px;font-weight:700;margin-bottom:6px">③ 両方まとめて実行（推奨）</div>
+        <button onclick="fixAll()" style="width:100%;padding:13px;background:#c4a070;color:#1e2420;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;font-family:var(--font)">✦ 両方まとめて実行</button>
+        <div id="fix-log3" style="margin-top:8px;font-size:11px;color:#b0c4b4;display:none;background:#1e2420;padding:10px;border-radius:6px;max-height:200px;overflow-y:auto;line-height:1.9"></div>
+      </div>
+
+      <button onclick="hideFixPanel()" style="width:100%;padding:13px;background:transparent;border:1px solid #3d4d42;color:#b0c4b4;border-radius:8px;font-size:13px;cursor:pointer;font-family:var(--font)">← 閉じる</button>
+    </div>
   </div>
 </div>
 
@@ -2240,6 +2273,101 @@ async function runReport(){
 // ════════════════════════
 // BACKUP & RESTORE
 // ════════════════════════
+function showFixPanel(){ document.getElementById('fix-panel').style.display='block'; }
+function hideFixPanel(){ document.getElementById('fix-panel').style.display='none'; }
+
+function fixMedMP(){
+  const log = document.getElementById('fix-log1');
+  log.style.display='block'; log.innerHTML='';
+  const all = getAll();
+  if(!all.length){ log.innerHTML='<span style="color:#c87060">データがありません</span>'; return; }
+  let count=0;
+  all.forEach(day=>{
+    (day.entries||[]).forEach(e=>{
+      if(e.category==='sleep'||(e.categories||[]).includes('sleep')){
+        if(!e.details) e.details={};
+        const changed = !e.details.medication||!e.details.mouthpiece;
+        e.details.medication=true; e.details.mouthpiece=true;
+        if(changed){ log.innerHTML+=`<span style="color:#70a880">✓ ${day.date} 眠剤+MPをセット</span>\n`; count++; }
+        else { log.innerHTML+=`<span style="color:#3e5442">- ${day.date} 既にセット済み</span>\n`; }
+      }
+    });
+  });
+  S('kiroku_entries',all);
+  log.innerHTML+=`\n<span style="color:#f0d0a8;font-weight:700">✅ 完了 ${count}件を更新しました</span>`;
+  log.scrollTop=log.scrollHeight;
+}
+
+function fixSleepDuration(){
+  const log = document.getElementById('fix-log2');
+  log.style.display='block'; log.innerHTML='';
+  const all = getAll();
+  if(!all.length){ log.innerHTML='<span style="color:#c87060">データがありません</span>'; return; }
+  let count=0, skip=0;
+  all.forEach(day=>{
+    (day.entries||[]).forEach(e=>{
+      if(e.category==='sleep'||(e.categories||[]).includes('sleep')){
+        const raw=e.details?.raw||e.summary||'';
+        if(!raw){ log.innerHTML+=`<span style="color:#f0d0a8">△ ${day.date} テキストなし</span>\n`; skip++; return; }
+        const result=calculateSleepDuration(raw);
+        if(result){
+          if(!e.details) e.details={};
+          const old=e.details.duration_h;
+          e.details.duration_h=result.duration_h;
+          e.details.bed_time=result.bed_time;
+          e.details.wake_time=result.wake_time;
+          log.innerHTML+=`<span style="color:#70a880">✓ ${day.date} ${old?old+'h→':''}${result.duration_h}h（${result.bed_time}〜${result.wake_time}）</span>\n`;
+          count++;
+        } else {
+          log.innerHTML+=`<span style="color:#f0d0a8">△ ${day.date} 時刻抽出不可:「${raw.slice(0,30)}」</span>\n`;
+          skip++;
+        }
+      }
+    });
+  });
+  S('kiroku_entries',all);
+  log.innerHTML+=`\n<span style="color:#f0d0a8;font-weight:700">✅ 完了 計算済:${count}件 / 抽出不可:${skip}件</span>`;
+  log.scrollTop=log.scrollHeight;
+}
+
+function fixAll(){
+  const log = document.getElementById('fix-log3');
+  log.style.display='block'; log.innerHTML='';
+  const all = getAll();
+  if(!all.length){ log.innerHTML='<span style="color:#c87060">データがありません</span>'; return; }
+  let c1=0,c2=0,skip=0;
+  all.forEach(day=>{
+    (day.entries||[]).forEach(e=>{
+      if(e.category==='sleep'||(e.categories||[]).includes('sleep')){
+        if(!e.details) e.details={};
+        // 眠剤・MP
+        const changed=!e.details.medication||!e.details.mouthpiece;
+        e.details.medication=true; e.details.mouthpiece=true;
+        if(changed) c1++;
+        // 睡眠時間
+        const raw=e.details?.raw||e.summary||'';
+        const result=raw?calculateSleepDuration(raw):null;
+        if(result){
+          e.details.duration_h=result.duration_h;
+          e.details.bed_time=result.bed_time;
+          e.details.wake_time=result.wake_time;
+          log.innerHTML+=`<span style="color:#70a880">✓ ${day.date} ${result.duration_h}h（${result.bed_time}〜${result.wake_time}）眠剤+MP✓</span>\n`;
+          c2++;
+        } else {
+          log.innerHTML+=`<span style="color:#f0d0a8">△ ${day.date} 眠剤+MP✓ / 時刻抽出不可</span>\n`;
+          skip++;
+        }
+      }
+    });
+  });
+  S('kiroku_entries',all);
+  log.innerHTML+=`\n<span style="color:#f0d0a8;font-weight:700">✅ 全処理完了｜眠剤+MP:${c1}件 睡眠時間再計算:${c2}件 抽出不可:${skip}件</span>`;
+  log.scrollTop=log.scrollHeight;
+  // 履歴タブを更新
+  if(currentNav==='history') render();
+}
+
+
 function doBackup(){
   const data = {};
   for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); data[k]=localStorage.getItem(k); }
