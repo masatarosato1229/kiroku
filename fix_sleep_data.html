@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>記録データ修正ツール</title>
+<style>
+  body { font-family: 'Helvetica Neue', sans-serif; background:#1e2420; color:#e8f0e9; padding:20px; margin:0; }
+  h2 { color:#f0d0a8; margin-bottom:6px; font-size:18px; }
+  .sub { color:#6e8872; font-size:12px; margin-bottom:24px; }
+  .card { background:#2b342e; border:1px solid #3d4d42; border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h3 { color:#d4b896; font-size:13px; margin-bottom:10px; }
+  button {
+    width:100%; padding:14px; border:none; border-radius:10px;
+    font-size:14px; font-weight:700; cursor:pointer; margin-top:8px;
+    font-family: inherit; letter-spacing:.05em;
+  }
+  .btn-run  { background:#c4a070; color:#1e2420; }
+  .btn-run:active { background:#f0d0a8; }
+  .btn-back { background:#2b342e; color:#b0c4b4; border:1px solid #3d4d42; }
+  .log { background:#1e2420; border:1px solid #3d4d42; border-radius:8px;
+         padding:12px; font-size:11px; line-height:1.8; color:#b0c4b4;
+         max-height:320px; overflow-y:auto; white-space:pre-wrap; margin-top:10px; display:none; }
+  .ok  { color:#70a880; }
+  .ng  { color:#c87060; }
+  .warn { color:#f0d0a8; }
+  .done { color:#f0d0a8; font-weight:700; font-size:13px; margin-top:10px; }
+</style>
+</head>
+<body>
+
+<h2>🛠 記録データ一括修正ツール</h2>
+<p class="sub">kirokuアプリのlocalStorageを直接修正します。同じブラウザ・同じドメインで開いてください。</p>
+
+<div class="card">
+  <h3>① 全睡眠エントリ → 眠剤あり＋マウスピース着用に一括変更</h3>
+  <p style="font-size:11px;color:#6e8872;margin-bottom:8px">
+    すべての日付の睡眠カテゴリのエントリに<br>
+    <strong style="color:#e8f0e9">medication: true（眠剤あり）</strong> と
+    <strong style="color:#e8f0e9">mouthpiece: true（MP着用）</strong> をセットします。
+  </p>
+  <button class="btn-run" onclick="runPatch1()">✦ 実行する</button>
+  <div class="log" id="log1"></div>
+</div>
+
+<div class="card">
+  <h3>② 睡眠時間の再計算（入眠・起床テキストから自動抽出）</h3>
+  <p style="font-size:11px;color:#6e8872;margin-bottom:8px">
+    rawテキストに「am5時に寝た」「pm13時に起きた」のような記述がある場合、<br>
+    睡眠時間（duration_h）・入眠時刻（bed_time）・起床時刻（wake_time）を再計算します。
+  </p>
+  <button class="btn-run" onclick="runPatch2()">✦ 実行する</button>
+  <div class="log" id="log2"></div>
+</div>
+
+<div class="card">
+  <h3>③ ①＋② まとめて実行</h3>
+  <button class="btn-run" onclick="runAll()">✦ 両方まとめて実行</button>
+  <div class="log" id="log3"></div>
+</div>
+
+<button class="btn-back" onclick="history.back()">← 戻る</button>
+
+<script>
+// ── localStorage ヘルパー
+const STORE_KEY = 'kiroku_entries';
+function getAll(){ try{ const v=localStorage.getItem(STORE_KEY); return v?JSON.parse(v):[]; }catch(e){ return []; } }
+function saveAll(d){ localStorage.setItem(STORE_KEY, JSON.stringify(d)); }
+
+// ── 睡眠時間計算（アプリ本体と同じロジック）
+function calculateSleepDuration(text){
+  if(!text) return null;
+  const t = text
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[：]/g, ':');
+  const normalized = t.replace(/(\d{1,2})\s*時半/g, '$1時30分');
+
+  function toH(hour, min, ampm){
+    let h = parseInt(hour), m = parseInt(min||0);
+    const ap = (ampm||'').toLowerCase().replace(/\s/g,'');
+    if(ap === 'pm' && h < 12) h += 12;
+    if(ap === 'am' && h === 12) h = 0;
+    return h + m / 60;
+  }
+
+  const sleepMatch = normalized.match(
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:入眠|寝|眠り|眠|ベッド|布団|就寝|寝付)/i
+  );
+  const wakeMatch = normalized.match(
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚|目を覚|起き上)/i
+  );
+
+  if(!sleepMatch || !wakeMatch) return null;
+
+  let sleepH = toH(sleepMatch[2], sleepMatch[3], sleepMatch[1]);
+  let wakeH  = toH(wakeMatch[2],  wakeMatch[3],  wakeMatch[1]);
+  if(sleepH > wakeH) wakeH += 24;
+
+  const duration = Math.round((wakeH - sleepH) * 10) / 10;
+  if(duration <= 0 || duration > 16) return null;
+
+  const toHHMM = h => {
+    const hh = Math.floor(h % 24);
+    const mm = Math.round((h % 1) * 60);
+    return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+  };
+  return { bed_time: toHHMM(sleepH), wake_time: toHHMM(wakeH % 24), duration_h: duration };
+}
+
+// ── ① 眠剤・MP一括セット
+function patch1(all, log){
+  let count = 0;
+  all.forEach(day => {
+    (day.entries||[]).forEach(e => {
+      if(e.category === 'sleep' || (e.categories||[]).includes('sleep')){
+        if(!e.details) e.details = {};
+        const changed = !e.details.medication || !e.details.mouthpiece;
+        e.details.medication = true;
+        e.details.mouthpiece = true;
+        if(changed){
+          log(`<span class="ok">✓ ${day.date}</span> 眠剤+MP をセット`);
+          count++;
+        } else {
+          log(`<span style="color:#3e5442">- ${day.date}</span> 既にセット済み（スキップ）`);
+        }
+      }
+    });
+  });
+  return count;
+}
+
+// ── ② 睡眠時間再計算
+function patch2(all, log){
+  let count = 0, skipped = 0;
+  all.forEach(day => {
+    (day.entries||[]).forEach(e => {
+      if(e.category === 'sleep' || (e.categories||[]).includes('sleep')){
+        const raw = e.details?.raw || e.summary || '';
+        if(!raw){ log(`<span class="warn">△ ${day.date}</span> rawテキストなし`); skipped++; return; }
+
+        const result = calculateSleepDuration(raw);
+        if(result){
+          if(!e.details) e.details = {};
+          const old = e.details.duration_h;
+          e.details.duration_h = result.duration_h;
+          e.details.bed_time   = result.bed_time;
+          e.details.wake_time  = result.wake_time;
+          log(`<span class="ok">✓ ${day.date}</span>  ${old ? old+'h → ' : ''}${result.duration_h}h（就寝 ${result.bed_time} 起床 ${result.wake_time}）`);
+          count++;
+        } else {
+          log(`<span class="warn">△ ${day.date}</span>  時刻抽出できず — テキスト: "${raw.slice(0,40)}"`);
+          skipped++;
+        }
+      }
+    });
+  });
+  log(`\n計算済み: ${count}件 / 抽出不可: ${skipped}件`);
+  return count;
+}
+
+function showLog(id, text){ const el=document.getElementById(id); el.style.display='block'; el.innerHTML+=text+'\n'; el.scrollTop=el.scrollHeight; }
+function clearLog(id){ const el=document.getElementById(id); el.style.display='block'; el.innerHTML=''; }
+
+function runPatch1(){
+  clearLog('log1');
+  const all = getAll();
+  if(!all.length){ showLog('log1','<span class="ng">データがありません。同じブラウザ・ドメインで開いているか確認してください。</span>'); return; }
+  showLog('log1', `データ読み込み: ${all.length}日分\n`);
+  const n = patch1(all, t => showLog('log1', t));
+  saveAll(all);
+  showLog('log1', `\n<span class="done">✅ 完了。${n}件を更新しました。アプリをリロードして確認してください。</span>`);
+}
+
+function runPatch2(){
+  clearLog('log2');
+  const all = getAll();
+  if(!all.length){ showLog('log2','<span class="ng">データがありません。</span>'); return; }
+  showLog('log2', `データ読み込み: ${all.length}日分\n`);
+  patch2(all, t => showLog('log2', t));
+  saveAll(all);
+  showLog('log2', `\n<span class="done">✅ 完了。アプリをリロードして確認してください。</span>`);
+}
+
+function runAll(){
+  clearLog('log3');
+  const all = getAll();
+  if(!all.length){ showLog('log3','<span class="ng">データがありません。</span>'); return; }
+  showLog('log3', `データ読み込み: ${all.length}日分\n━━ ① 眠剤・MP一括セット ━━\n`);
+  const n1 = patch1(all, t => showLog('log3', t));
+  showLog('log3', `\n━━ ② 睡眠時間再計算 ━━\n`);
+  patch2(all, t => showLog('log3', t));
+  saveAll(all);
+  showLog('log3', `\n<span class="done">✅ 全処理完了。眠剤+MP: ${n1}件更新。アプリをリロードして確認してください。</span>`);
+}
+</script>
+</body>
+</html>
