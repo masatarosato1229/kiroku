@@ -918,52 +918,93 @@ function autoCategory(text){ return autoCategories(text)[0]; }
 // 例: "am 4半に眠りにつきPm13時過ぎ起きた" → { bed:4.5, wake:13.0, duration:8.5 }
 // ════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════
-// 睡眠時間抽出エンジン v2（要件通りの実装）
-// 「Am 5時前に入眠し Am 11時ごろに目を覚ました」→ 6h
+// 睡眠時間抽出エンジン v3
+// 対応パターン:
+//   「Am 5時前に入眠し Am 11時ごろに目を覚ました」
+//   「何時に起きた・何時に寝た」
+//   「3時に就寝して13時に起床」
+//   「夜中の2時に寝て昼の1時に起きた」
 // ════════════════════════════════════════════════════
 function calculateSleepDuration(text){
   if(!text) return null;
-  // 全角→半角、大文字→小文字に正規化
+
+  // 全角→半角、改行→スペース
   const t = text
     .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/[：]/g, ':');
+    .replace(/[：]/g, ':')
+    .replace(/\n/g, ' ');
 
-  // 「半」を30分相当として前処理（例: "5時半" → "5時30分"）
+  // 「半」→「30分」に前処理
   const normalized = t.replace(/(\d{1,2})\s*時半/g, '$1時30分');
 
-  // AM/PM を考慮した時刻→10進数変換
-  function toH(hour, min, ampm){
+  // AM/PM考慮の時刻→10進数変換
+  function toH(hour, min, ampm, context){
     let h = parseInt(hour), m = parseInt(min||0);
     const ap = (ampm||'').toLowerCase().replace(/\s/g,'');
-    if(ap === 'pm' && h < 12) h += 12;
-    if(ap === 'am' && h === 12) h = 0;
-    return h + m / 60;
+    if(ap==='pm'||ap==='午後') { if(h<12) h+=12; }
+    else if(ap==='am'||ap==='午前') { if(h===12) h=0; }
+    else {
+      // AM/PM未記載の場合：文脈から推定
+      // 「夜中・深夜・就寝・夜」→深夜扱い（0〜5時 または 20〜23時）
+      // 「昼・午後・起きた・起床」→昼以降
+      if(/夜中|深夜|夜に寝|夜寝/.test(context) && h>=1 && h<=6) { /* そのまま */ }
+      else if(/昼|午後/.test(context) && h>=1 && h<=11) h+=12;
+    }
+    return h + m/60;
   }
 
-  // 入眠時刻の抽出（入眠コンテキストが後ろに来るパターンに対応）
-  // 例: "Am 5時前に入眠" / "am5時ごろ寝た" / "11時半に眠りについた"
-  const sleepMatch = normalized.match(
-    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:入眠|寝|眠り|眠|ベッド|布団|就寝|寝付)/i
-  );
+  // 入眠パターン（より広く）
+  const sleepPatterns = [
+    // 「am5時に入眠」「午前5時ごろ寝た」「5時30分に就寝」
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい|半)?\s*(?:に|ごろ|頃|ぐらい)?\s*(?:入眠|寝た|寝付|就寝|眠りにつ|眠った|ベッド|布団|寝ました|眠りました)/i,
+    // 「寝たのが5時」「就寝は23時」
+    /(?:寝たの|就寝は?|入眠は?|眠りについたの)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?/i,
+    // 「5時に寝て」「23時に就寝して」
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ)?\s*に\s*(?:寝て|就寝して|眠って)/i,
+  ];
 
-  // 起床時刻の抽出（起床コンテキストが後ろに来るパターンに対応）
-  // 例: "Am 11時ごろに目を覚ました" / "7時に起きた" / "pm1時過ぎに起床"
-  const wakeMatch = normalized.match(
-    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚|目を覚|起き上)/i
-  );
+  // 起床パターン（より広く）
+  const wakePatterns = [
+    // 「pm13時ごろ目を覚ました」「11時に起きた」
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい|半)?\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚めました)/i,
+    // 「起きたのが13時」「起床は7時」
+    /(?:起きたの|起床は?|目覚めは?)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?/i,
+    // 「13時に起きて」
+    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ)?\s*に\s*(?:起きて|起床して)/i,
+  ];
 
-  if(!sleepMatch || !wakeMatch) return null;
+  let sleepH = null, wakeH = null;
 
-  let sleepH = toH(sleepMatch[2], sleepMatch[3], sleepMatch[1]);
-  let wakeH  = toH(wakeMatch[2],  wakeMatch[3],  wakeMatch[1]);
+  for(const p of sleepPatterns){
+    const m = normalized.match(p);
+    if(m){
+      // グループ位置が正規表現によって異なる
+      const groups = [...m];
+      const ampm = groups.find((g,i)=>i>0&&/am|pm|午前|午後/i.test(g||''))||'';
+      const hourStr = groups.find((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')&&parseInt(g)<=24)||null;
+      const minStr  = groups.filter((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')).slice(1)[0]||'0';
+      if(hourStr){ sleepH = toH(hourStr, minStr, ampm, normalized); break; }
+    }
+  }
 
-  // AM/PM 未記載で sleepH > wakeH の場合 → 日またぎと判定（wakeH += 24）
+  for(const p of wakePatterns){
+    const m = normalized.match(p);
+    if(m){
+      const groups = [...m];
+      const ampm = groups.find((g,i)=>i>0&&/am|pm|午前|午後/i.test(g||''))||'';
+      const hourStr = groups.find((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')&&parseInt(g)<=24)||null;
+      const minStr  = groups.filter((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')).slice(1)[0]||'0';
+      if(hourStr){ wakeH = toH(hourStr, minStr, ampm, normalized); break; }
+    }
+  }
+
+  if(sleepH===null||wakeH===null) return null;
+
+  // 日またぎ判定
   if(sleepH > wakeH) wakeH += 24;
-
   const duration = Math.round((wakeH - sleepH) * 10) / 10;
   if(duration <= 0 || duration > 16) return null;
 
-  // HH:MM 文字列
   const toHHMM = h => {
     const hh = Math.floor(h % 24);
     const mm = Math.round((h % 1) * 60);
@@ -977,7 +1018,7 @@ function calculateSleepDuration(text){
   };
 }
 
-// 旧名互換（内部で calculateSleepDuration を呼ぶ）
+// 旧名互換
 function parseSleepTimes(text){ return calculateSleepDuration(text); }
 
 // ════════════════════════════════════════════════════
@@ -991,66 +1032,139 @@ function parseSleepTimes(text){ return calculateSleepDuration(text); }
 function generateAIResponse(text, historyData){
   if(!text) return '';
   const all    = historyData || getAll();
-  const recent = all.slice(0, 7);
+  const recent = all.slice(0, 14); // 直近2週間
   const parts  = [];
 
-  // ── 睡眠専門家の分析
+  // ── 睡眠専門家の分析（バリエーション豊富）
   if(KEYWORD_RULES.find(r=>r.cat==='sleep')?.re.test(text)){
-    const parsed  = parseSleepTimes(text);
-    const dur     = parsed?.duration_h ?? (() => {
+    const parsed = parseSleepTimes(text);
+    const dur    = parsed?.duration_h ?? (() => {
       const m = text.match(/(\d+(?:\.\d+)?)\s*時間/); return m ? +m[1] : null;
     })();
-    const hasMP   = /マウスピース/.test(text);
-    const hasMed  = /眠剤|デエビゴ/.test(text);
-    const prevDay = recent.find(d=>d.entries?.some(e=>e.category==='sleep'&&e.details?.duration_h));
-    const prevH   = prevDay?.entries?.find(e=>e.category==='sleep')?.details?.duration_h ?? null;
+    const bedT   = parsed?.bed_time ?? null;
+    const wakeT  = parsed?.wake_time ?? null;
+    const hasMP  = /マウスピース/.test(text);
+    const hasMed = /眠剤|デエビゴ/.test(text);
 
-    let msg = '【睡眠専門家の分析】\n記録を確認しました。';
-    if(dur !== null && prevH !== null){
-      msg += `前日は${prevH}時間でしたが、今回は${dur}時間ですね。`;
-      if(hasMP) msg += `マウスピース装着時の開口による影響も考慮し、睡眠の質に変化がないか注視しましょう。`;
-      if(dur < prevH) msg += `　睡眠時間がやや短くなっています。就寝時刻を30分前倒しにするだけで大きく改善できます。`;
-      else if(dur > prevH) msg += `　前日より改善できています、この調子で続けましょう！`;
-    } else if(dur !== null){
-      if(hasMP) msg += `マウスピース装着による開口で、睡眠の質が低下しやすい状態ですね。日中のパフォーマンス維持のため、起床時に少しでも疲労感があれば、昼間に短い仮眠（15〜20分）をとるなど工夫してみましょう。`;
-      if(dur < 6)        msg += `${dur}時間の睡眠は不足気味です。理想の7.5時間まであと${(7.5-dur).toFixed(1)}時間。就寝時刻の前倒しを習慣化しましょう。`;
-      else if(dur >= 7.5) msg += `${dur}時間の理想的な睡眠が確保できています！この調子を維持しましょう。`;
-      else               msg += `${dur}時間の睡眠を記録。引き続き入眠・起床時刻の記録でリズム分析ができます。`;
-    } else {
-      msg += `${hasMP?'マウスピース装着による開口で、睡眠の質が低下しやすい状態ですね。日中のパフォーマンス維持のため、起床時に少しでも疲労感があれば、昼間に短い仮眠をとるなど工夫してみましょう。':'入眠・起床時刻も記録すると睡眠スコアの精度が上がります。'}`;
-    }
-    if(hasMed && !hasMP) msg += `　眠剤の効果と翌朝の疲労感を継続記録すると、最適な使用タイミングが見えてきます。`;
-    parts.push(msg);
-  }
+    // 過去データを取得
+    const sleepHistory = recent
+      .flatMap(d=>d.entries||[])
+      .filter(e=>e.category==='sleep' && e.details?.duration_h)
+      .slice(0, 7);
+    const prevH   = sleepHistory[0]?.details?.duration_h ?? null;
+    const avgH    = sleepHistory.length
+      ? Math.round(sleepHistory.reduce((s,e)=>s+e.details.duration_h,0)/sleepHistory.length*10)/10
+      : null;
+    const mpDays  = sleepHistory.filter(e=>e.details?.mouthpiece).length;
+    const medDays = sleepHistory.filter(e=>e.details?.medication).length;
 
-  // ── 栄養士の分析（タンパク質・脂質・糖質推定）
-  if(KEYWORD_RULES.find(r=>r.cat==='meal')?.re.test(text)){
-    const nutr = estimateNutrition(text);
-    const mealDays = recent.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
+    // 入眠ばらつき計算
+    const bedTimes = sleepHistory.filter(e=>e.details?.bed_time).map(e=>{
+      const [h,m]=e.details.bed_time.split(':').map(Number);
+      return h>=20 ? h+m/60 : h+24+m/60; // 深夜またぎを考慮
+    });
+    const bedVariance = bedTimes.length >= 3
+      ? (() => {
+          const avg = bedTimes.reduce((s,v)=>s+v,0)/bedTimes.length;
+          return Math.round(Math.sqrt(bedTimes.reduce((s,v)=>s+(v-avg)**2,0)/bedTimes.length)*60);
+        })()
+      : null; // 分単位の標準偏差
 
-    let msg = '【栄養士の分析】\n詳細な食事記録ありがとうございます。';
-    if(nutr.matched.length > 0){
-      msg += `筋肉量を増やすためのメニューとして、${nutr.matched.slice(0,3).join('・')}でタンパク質がしっかり確保されています。`;
-      if(nutr.p > 0 || nutr.f > 0 || nutr.c > 0){
-        msg += `\n推定栄養素: P（タンパク質）${nutr.p}g / F（脂質）${nutr.f}g / C（糖質）${nutr.c}g`;
+    let msg = '【睡眠専門家の分析】\n';
+
+    if(dur !== null){
+      // 前日比・平均比の具体的コメント
+      if(prevH !== null && avgH !== null){
+        const diffPrev = Math.round((dur - prevH)*10)/10;
+        const diffAvg  = Math.round((dur - avgH)*10)/10;
+        msg += `今回の睡眠は${dur}時間。前日（${prevH}h）比${diffPrev>=0?'+':''}${diffPrev}h、直近平均（${avgH}h）比${diffAvg>=0?'+':''}${diffAvg}hです。`;
+        if(dur >= 7.5) msg += `\n理想の7.5時間を達成！`;
+        else if(dur < 6) msg += `\n6時間を下回っており、パフォーマンス・代謝への影響が出やすい水準です。今夜は30分早く就寝することを意識してみましょう。`;
+        else msg += `\nあと${(7.5-dur).toFixed(1)}時間で理想の7.5時間に届きます。`;
+      } else {
+        msg += `今回の睡眠は${dur}時間。`;
+        if(dur >= 7.5) msg += `理想的な睡眠時間が確保できています！`;
+        else if(dur < 6) msg += `やや短めです。就寝時刻を少し前倒しにする工夫が効果的です。`;
+        else msg += `引き続き記録を続けると、理想的なリズムが見えてきます。`;
       }
-      if(nutr.f > 20) msg += `\n脂質がやや高めです。次の食事で消化の良い和食（豆腐・納豆・味噌汁）を取り入れると、胃腸への負担も減り、より完璧なボディメイクに繋がります。`;
-      else if(nutr.p >= 20) msg += `\nタンパク質量は良好です！運動後30分以内に摂取できると筋肉合成効率が高まります。`;
+    }
+
+    if(bedT && wakeT){
+      msg += `\n就寝${bedT}・起床${wakeT}。`;
+    }
+
+    if(hasMP && hasMed){
+      msg += `\nデエビゴ＋マウスピース併用ですね。`;
+      if(mpDays > 0) msg += `過去${mpDays}日のMP使用データと比較すると、`;
+      msg += `マウスピース装着時は口が開きやすく中途覚醒リスクがあります。起床時の乾燥感・疲労感を次回も記録してください。`;
+    } else if(hasMP){
+      msg += `\nマウスピース着用の夜。`;
+      if(bedVariance !== null && bedVariance > 60) msg += `ここ数日の入眠時刻のばらつきが約${bedVariance}分あります。毎日同じ時刻に就寝することで睡眠効率が上がります。`;
+      else msg += `就寝時刻を一定に保つことで、マウスピース装着時でも深い睡眠が得やすくなります。`;
+    } else if(hasMed){
+      msg += `\n眠剤使用の夜。`;
+      if(medDays >= 5) msg += `直近${medDays}日間継続使用中。薬の効果が出る時間帯と中途覚醒の有無を記録すると、最適な服用タイミングが見えてきます。`;
+      else msg += `翌朝の疲労感も記録しておくと、薬の有効性を客観的に評価できます。`;
+    }
+
+    if(bedVariance !== null){
+      if(bedVariance > 90) msg += `\n⚠ 直近の入眠時刻のばらつきが${bedVariance}分と大きめです。就寝時刻を±30分以内に安定させると睡眠の質が向上します。`;
+      else if(bedVariance <= 30) msg += `\n✓ 入眠時刻が安定しています（ばらつき${bedVariance}分）。規則正しいリズムが維持できています。`;
+    }
+
+    parts.push(msg);
+  }
+
+  // ── 栄養士の分析（P/F/C推定＋過去比較）
+  if(KEYWORD_RULES.find(r=>r.cat==='meal')?.re.test(text)){
+    const nutr    = estimateNutrition(text);
+    const mealHistory = recent.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+    const avgProtein  = mealHistory.filter(e=>e.details?.protein_g)
+      .reduce((s,e,_,a)=>s+e.details.protein_g/a.length, 0);
+    const mealDays    = recent.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
+
+    let msg = '【栄養士の分析】\n';
+    if(nutr.matched.length > 0){
+      msg += `${nutr.matched.slice(0,4).join('・')}を確認しました。`;
+      if(nutr.p > 0 || nutr.f > 0 || nutr.c > 0){
+        msg += `\n推定栄養素 → タンパク質:${nutr.p}g / 脂質:${nutr.f}g / 糖質:${nutr.c}g`;
+      }
+      if(avgProtein > 0){
+        const diffP = Math.round(nutr.p - avgProtein);
+        msg += `\n直近のタンパク質平均${Math.round(avgProtein)}gと比べると今回は${diffP>=0?'+':''}${diffP}g。`;
+      }
+      if(nutr.p >= 25) msg += `\nタンパク質${nutr.p}gは筋肉合成に十分な量です。運動後30分以内に摂取できると効率が最大化されます。`;
+      else if(nutr.p >= 15) msg += `\nタンパク質は確保できています。あと${25-nutr.p}g追加できれば理想的です（卵1個≒6g、豆腐100g≒5g）。`;
+      else if(nutr.p > 0) msg += `\nタンパク質がやや少なめです。鶏むね肉・卵・豆腐などを1品追加するとボディメイクに直結します。`;
+      if(nutr.f > 25) msg += `\n脂質が高めです。次の食事では和食（味噌汁・納豆・卵）中心にすると消化にも優しくバランスが整います。`;
     } else {
-      msg += `主食・主菜・副菜を意識した食事は、栄養バランスを自然に整える基本です。${mealDays>=3?`直近${mealDays}日継続記録が続いています！`:''}`;
+      msg += `食事を記録しました。${mealDays>=5?`直近${mealDays}日間継続して食事記録できています！`:''}食材名も含めて記録すると栄養素の推定ができます（例：鶏むね・卵・豆腐など）。`;
     }
     parts.push(msg);
   }
 
-  // ── 運動分析
+  // ── トレーニング分析（週間データ比較）
   if(KEYWORD_RULES.find(r=>r.cat==='body')?.re.test(text)){
-    const durM   = text.match(/(\d+)\s*分/);
-    const dur    = durM ? +durM[1] : null;
-    const typeM  = text.match(/筋トレ|ジョギング|ウォーキング|散歩|ランニング|ジム|ストレッチ|スクワット/);
-    const exDays = recent.filter(d=>d.entries?.some(e=>e.category==='body')).length;
+    const durM    = text.match(/(\d+)\s*分/);
+    const dur     = durM ? +durM[1] : null;
+    const typeM   = text.match(/筋トレ|ジョギング|ウォーキング|散歩|ランニング|ジム|ストレッチ|スクワット/);
+    const exDays  = recent.slice(0,7).filter(d=>d.entries?.some(e=>e.category==='body')).length;
+    const exMins  = recent.slice(0,7).flatMap(d=>d.entries||[])
+      .filter(e=>e.category==='body'&&e.details?.duration_min)
+      .reduce((s,e)=>s+e.details.duration_min,0);
+
     let msg = '【トレーニングの分析】\n';
-    if(dur && dur >= 30) msg += `${typeM?typeM[0]:'運動'}${dur}分を記録。有酸素運動は20分超から脂肪燃焼モードになるため、非常に効果的です。${exDays>=3?`今週${exDays}日達成！`:''}`;
-    else msg += `${typeM?typeM[0]:'運動'}を記録。${exDays>=3?`今週${exDays}日継続中。`:'週3回を目標に。'}睡眠・食事データとの組み合わせでコンディションの相関が見えます。`;
+    if(dur){
+      msg += `${typeM?typeM[0]:'運動'}${dur}分を記録。`;
+      msg += dur >= 30
+        ? `有酸素運動は20分超から脂肪燃焼モードに入ります。この時間は非常に効果的です。`
+        : `短時間でも継続が大切です。`;
+    } else {
+      msg += `${typeM?typeM[0]:'運動'}を記録しました。`;
+    }
+    if(exDays >= 3) msg += `\n今週${exDays}日達成${exMins>0?`、合計${exMins}分`:''}。週3回以上で代謝改善効果が高まります。`;
+    else msg += `\n今週はまだ${exDays}日です。週3回を目標に積み上げましょう。`;
+    msg += `\n睡眠との相関も注目してください。運動翌日の睡眠スコアが改善する傾向がある方が多いです。`;
     parts.push(msg);
   }
 
@@ -1059,27 +1173,38 @@ function generateAIResponse(text, historyData){
     const amtM  = text.match(/(\d[\d,]*)\s*円/);
     const amt   = amtM ? +amtM[1].replace(/,/g,'') : null;
     const isInc = /収入|給料/.test(text);
-    const wkExp = recent.reduce((s,d)=>s+(d.entries||[]).filter(e=>e.category==='finance'&&e.details?.transaction_type==='expense').reduce((ss,e)=>ss+(e.details?.amount||0),0),0);
+    const wkExp = recent.slice(0,7).reduce((s,d)=>s+(d.entries||[])
+      .filter(e=>e.category==='finance'&&e.details?.transaction_type==='expense')
+      .reduce((ss,e)=>ss+(e.details?.amount||0),0),0);
+    const moExp = recent.reduce((s,d)=>s+(d.entries||[])
+      .filter(e=>e.category==='finance'&&e.details?.transaction_type==='expense')
+      .reduce((ss,e)=>ss+(e.details?.amount||0),0),0);
     let msg = '【収支の分析】\n';
-    if(isInc && amt) msg += `収入${amt.toLocaleString()}円を記録。収入・支出を両方記録することで月末の収支バランスが可視化されます。`;
-    else if(amt) msg += `${amt.toLocaleString()}円の支出。今週の累計支出は${(wkExp+amt).toLocaleString()}円です。${amt>10000?'大きな支出ですね。カテゴリ別に記録すると削減ポイントが見えます。':'継続記録で月の支出パターンが把握できます。'}`;
-    else msg += `収支を記録しました。${wkExp?`今週の累計支出は約${wkExp.toLocaleString()}円です。`:''}金額も入力すると週・月の支出パターン分析ができます。`;
+    if(isInc && amt) msg += `収入${amt.toLocaleString()}円を記録。`;
+    else if(amt){
+      msg += `${amt.toLocaleString()}円の支出。`;
+      msg += `今週累計:¥${(wkExp+amt).toLocaleString()} / 直近2週間累計:¥${(moExp+amt).toLocaleString()}。`;
+      if(amt > 10000) msg += `\n大きめの出費ですね。カテゴリ別に記録すると月末の削減ポイントが明確になります。`;
+    } else msg += `収支を記録。金額も入力すると週・月の支出パターン分析ができます。`;
     parts.push(msg);
   }
 
-  // ── 肌分析
+  // ── 肌分析（睡眠・食事との相関を具体的に提示）
   if(KEYWORD_RULES.find(r=>r.cat==='skin')?.re.test(text)){
-    const hasDry  = /乾燥/.test(text), hasAcne = /ニキビ/.test(text);
+    const hasDry  = /乾燥/.test(text);
+    const hasAcne = /ニキビ/.test(text);
+    const prevSleep = recent.flatMap(d=>d.entries||[])
+      .find(e=>e.category==='sleep'&&e.details?.duration_h)?.details?.duration_h ?? null;
     let msg = '【肌専門家の分析】\n';
-    if(hasDry && hasAcne) msg += `乾燥とニキビが同時発生はインナードライの可能性あり。セラミド配合の保湿剤で徹底保湿しつつ、ノンコメドジェニック製品を選びましょう。`;
-    else if(hasDry) msg += `乾燥は睡眠不足・水分不足が原因になりやすいです。睡眠記録と照らし合わせて相関を確認してみましょう。`;
-    else if(hasAcne) msg += `ニキビは食事・睡眠・ストレスの影響を受けます。今日の食事・睡眠データと照らし合わせてパターンを探してみましょう。`;
+    if(hasDry && hasAcne) msg += `乾燥とニキビの同時発生はインナードライの可能性があります。洗顔後すぐ（3分以内）の保湿が重要です。${prevSleep&&prevSleep<6?`直近の睡眠が${prevSleep}時間と短め—睡眠不足が皮脂バランスを乱している可能性があります。`:``}`;
+    else if(hasDry) msg += `乾燥の原因は睡眠不足・水分不足・洗顔後の保湿遅延が多いです。${prevSleep?`直近の睡眠${prevSleep}時間と合わせて相関を確認してみましょう。`:'睡眠記録と照らし合わせると悪化パターンが特定できます。'}`;
+    else if(hasAcne) msg += `ニキビは食事・睡眠・ストレスの3要因が複合します。${prevSleep&&prevSleep<6?`直近睡眠${prevSleep}hと睡眠不足が続いています—皮脂分泌が増えやすい状態です。`:'今日の食事・睡眠データと照らし合わせてパターンを探してみましょう。'}`;
     else msg += `肌の状態を記録しました。継続記録で食事・睡眠との相関が見えてきます。`;
     parts.push(msg);
   }
 
   if(parts.length === 0){
-    parts.push('【AI分析】記録を保存しました。この調子で日々のデータを蓄積していきましょう！');
+    parts.push('【AI分析】記録しました。データが蓄積されるほど、より詳細な分析ができるようになります。継続が力です！');
   }
   return parts.join('\n\n');
 }
@@ -1845,8 +1970,32 @@ function buildMonthlyCards(){
     const avgSleep = sleepEntries.length ? (sleepEntries.reduce((s,e)=>s+e.details.duration_h,0)/sleepEntries.length).toFixed(1) : null;
     const medDays = sleepEntries.filter(e=>e.details?.medication).length;
 
-    // Meal stats
-    const mealCount = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal').length;
+    // 睡眠時間の最大・最小（ばらつき）
+    const sleepDurs = sleepEntries.map(e=>e.details.duration_h);
+    const minSleep = sleepDurs.length ? Math.min(...sleepDurs).toFixed(1) : null;
+    const maxSleep = sleepDurs.length ? Math.max(...sleepDurs).toFixed(1) : null;
+
+    // 入眠時刻のばらつき（標準偏差・分単位）
+    const bedTimes = sleepEntries.filter(e=>e.details?.bed_time).map(e=>{
+      const [h,m] = e.details.bed_time.split(':').map(Number);
+      return h >= 18 ? h + m/60 : h + 24 + m/60;
+    });
+    const bedAvg = bedTimes.length ? bedTimes.reduce((s,v)=>s+v,0)/bedTimes.length : null;
+    const bedSD  = bedTimes.length >= 3
+      ? Math.round(Math.sqrt(bedTimes.reduce((s,v)=>s+(v-bedAvg)**2,0)/bedTimes.length)*60)
+      : null;
+    const bedAvgStr = bedAvg !== null ? (()=>{
+      const h=Math.floor(bedAvg%24), m=Math.round((bedAvg%1)*60);
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+    })() : null;
+
+    // 食事バランス（タンパク質推定合計）
+    const mealEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+    const totalProtein = mealEntries.reduce((s,e)=>{
+      if(e.details?.protein_g) return s+e.details.protein_g;
+      return s + estimateNutrition(e.details?.raw||e.summary||'').p;
+    }, 0);
+    const mealDaysCount = days.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
 
     // Exercise stats
     const exCount = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='body').length;
@@ -1868,13 +2017,17 @@ function buildMonthlyCards(){
     const [y,m] = ym.split('.');
     const monthName = `${y}年${parseInt(m)}月`;
 
-    // Stat items
+    // Stat items（食事回数を削除→食事バランス・睡眠ばらつきを追加）
     const stats = [
       {l:'記録日数', v:`${recordedDays}日`, c:'var(--accent3)'},
       avgSleep ? {l:'平均睡眠', v:`${avgSleep}h`, c:'#a0c0e8'} : null,
+      (minSleep&&maxSleep&&minSleep!==maxSleep) ? {l:'睡眠ばらつき', v:`${minSleep}〜${maxSleep}h`, c:'#7090b8'} : null,
       sleepDebt !== null ? {l:'睡眠借金', v:`${sleepDebt>0?'-':'+'} ${Math.abs(sleepDebt)}h`, c:sleepDebt>0?'var(--red-s)':'var(--green-s)'} : null,
+      bedAvgStr ? {l:'平均入眠', v:bedAvgStr, c:'#a0c0e8'} : null,
+      bedSD !== null ? {l:'入眠ばらつき', v:`±${bedSD}分`, c:bedSD>60?'var(--red-s)':bedSD>30?'var(--accent2)':'var(--green-s)'} : null,
       medDays>0 ? {l:'眠剤使用', v:`${medDays}日`, c:'var(--chalk3)'} : null,
-      {l:'食事記録', v:`${mealCount}回`, c:'#d4a040'},
+      totalProtein>0 ? {l:'P摂取推定', v:`${Math.round(totalProtein)}g`, c:'#f0d0a8'} : null,
+      mealDaysCount>0 ? {l:'食事記録', v:`${mealDaysCount}日`, c:'#d4a040'} : null,
       exCount>0 ? {l:'運動', v:`${exCount}回`, c:'var(--green-s)'} : null,
       avgMood ? {l:'平均気分', v:`${moodEmoji} ${avgMood}`, c:'var(--chalk2)'} : null,
       totalExp>0 ? {l:'支出合計', v:`¥${totalExp.toLocaleString()}`, c:'var(--red-s)'} : null,
@@ -1884,7 +2037,10 @@ function buildMonthlyCards(){
     return `<div style="background:var(--card);border:1px solid var(--border2);border-radius:var(--r);margin-bottom:10px;overflow:hidden">
       <div style="padding:12px 16px;background:var(--card2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
         <span style="font-size:13px;font-weight:700;color:var(--accent3)">${monthName}</span>
-        <span style="font-size:10px;color:var(--chalk3);font-family:var(--mono)">${ym}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:10px;color:var(--chalk3);font-family:var(--mono)">${ym}</span>
+          <button onclick="exportMonthToGoogleDrive('${ym}')" style="padding:4px 10px;background:none;border:1px solid var(--border2);color:var(--chalk3);border-radius:20px;font-size:9px;cursor:pointer;font-family:var(--font);white-space:nowrap">📤 Googleドライブへ</button>
+        </div>
       </div>
       <div style="padding:12px 16px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
         ${stats.map(s=>`<div style="background:var(--bg2);border-radius:var(--r2);padding:10px 8px;text-align:center">
@@ -2367,6 +2523,103 @@ function fixAll(){
   if(currentNav==='history') render();
 }
 
+
+// ════════════════════════════════════════════════════
+// Googleドライブ月次レポート出力
+// ※ Google Drive APIの直接アップロードはCORSで不可のため、
+//   テキストファイルをダウンロードしてGoogleドライブに手動保存する方式
+// ════════════════════════════════════════════════════
+function exportMonthToGoogleDrive(ym){
+  const all = getAll();
+  const [y,m] = ym.split('.');
+  const monthName = `${y}年${parseInt(m)}月`;
+  const days = all.filter(d=>d.date.startsWith(ym));
+
+  if(!days.length){ showToast('この月のデータがありません'); return; }
+
+  // 集計
+  const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='sleep'&&e.details?.duration_h);
+  const avgSleep = sleepEntries.length
+    ? (sleepEntries.reduce((s,e)=>s+e.details.duration_h,0)/sleepEntries.length).toFixed(1) : '—';
+  const minSleep = sleepEntries.length ? Math.min(...sleepEntries.map(e=>e.details.duration_h)).toFixed(1) : '—';
+  const maxSleep = sleepEntries.length ? Math.max(...sleepEntries.map(e=>e.details.duration_h)).toFixed(1) : '—';
+  const sleepDebt = sleepEntries.length
+    ? Math.round(sleepEntries.reduce((s,e)=>s+(IDEAL_SLEEP-e.details.duration_h),0)*10)/10 : 0;
+
+  const bedTimes = sleepEntries.filter(e=>e.details?.bed_time).map(e=>{
+    const [h,mm]=e.details.bed_time.split(':').map(Number);
+    return h>=18 ? h+mm/60 : h+24+mm/60;
+  });
+  const bedAvg = bedTimes.length ? bedTimes.reduce((s,v)=>s+v,0)/bedTimes.length : null;
+  const bedSD  = bedTimes.length>=3
+    ? Math.round(Math.sqrt(bedTimes.reduce((s,v)=>s+(v-bedAvg)**2,0)/bedTimes.length)*60) : null;
+  const bedAvgStr = bedAvg !== null
+    ? `${String(Math.floor(bedAvg%24)).padStart(2,'0')}:${String(Math.round((bedAvg%1)*60)).padStart(2,'0')}` : '—';
+
+  const mealEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+  const totalProtein = Math.round(mealEntries.reduce((s,e)=>{
+    if(e.details?.protein_g) return s+e.details.protein_g;
+    return s+estimateNutrition(e.details?.raw||e.summary||'').p;
+  },0));
+  const totalFat = Math.round(mealEntries.reduce((s,e)=>s+estimateNutrition(e.details?.raw||e.summary||'').f,0));
+  const totalCarbs = Math.round(mealEntries.reduce((s,e)=>s+estimateNutrition(e.details?.raw||e.summary||'').c,0));
+
+  const exCount = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='body').length;
+  const finEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='finance');
+  const totalExp = finEntries.filter(e=>e.details?.transaction_type==='expense').reduce((s,e)=>s+(e.details?.amount||0),0);
+
+  // レポートテキスト生成
+  const lines = [
+    `═══════════════════════════════════`,
+    `  ${monthName} 月次生活記録レポート`,
+    `  生成日時: ${new Date().toLocaleString('ja-JP')}`,
+    `═══════════════════════════════════`,
+    ``,
+    `【睡眠】`,
+    `  記録日数    : ${sleepEntries.length}日`,
+    `  平均睡眠    : ${avgSleep}時間`,
+    `  最短/最長   : ${minSleep}h 〜 ${maxSleep}h`,
+    `  睡眠借金    : ${sleepDebt > 0 ? '-' : '+'}${Math.abs(sleepDebt)}時間（理想7.5h基準）`,
+    `  平均入眠時刻: ${bedAvgStr}`,
+    `  入眠ばらつき: ${bedSD !== null ? '±'+bedSD+'分' : '—'}`,
+    sleepEntries.filter(e=>e.details?.medication).length > 0
+      ? `  眠剤使用    : ${sleepEntries.filter(e=>e.details?.medication).length}日`
+      : '',
+    ``,
+    `【食事・栄養（推定）】`,
+    `  食事記録日数 : ${days.filter(d=>d.entries?.some(e=>e.category==='meal')).length}日`,
+    `  タンパク質合計: ${totalProtein}g`,
+    `  脂質合計     : ${totalFat}g`,
+    `  糖質合計     : ${totalCarbs}g`,
+    ``,
+    `【運動】`,
+    `  記録回数     : ${exCount}回`,
+    ``,
+    `【収支】`,
+    `  支出合計     : ¥${totalExp.toLocaleString()}`,
+    ``,
+    `【日別サマリー】`,
+    ...days.map(day=>{
+      const se = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+      const sleepStr = se ? `睡眠${se.details.duration_h}h${se.details.bed_time?` (${se.details.bed_time}〜${se.details.wake_time||'?'})`:''}`:'睡眠記録なし';
+      const hasMeal = day.entries?.some(e=>e.category==='meal') ? '食事✓' : '';
+      const hasEx   = day.entries?.some(e=>e.category==='body') ? '運動✓' : '';
+      return `  ${day.date}  ${sleepStr}  ${hasMeal}  ${hasEx}`;
+    }),
+    ``,
+    `─── 以上 ─────────────────────────`,
+  ].filter(v=>v!==undefined);
+
+  const text = lines.join('\n');
+  const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `記録_${ym}_月次レポート.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`${monthName}のレポートをダウンロードしました。Googleドライブに保存してください。`);
+}
 
 function doBackup(){
   const data = {};
