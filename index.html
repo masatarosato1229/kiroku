@@ -466,13 +466,36 @@ const NUTRITION_DB = {
   味噌汁:    {p:3,f:1,c:3},    ヨーグルト:{p:4,f:3,c:8},
 };
 function estimateNutrition(text){
-  let p=0, f=0, c=0, matched=[];
-  for(const [food, n] of Object.entries(NUTRITION_DB)){
-    if(text.includes(food)){ p+=n.p; f+=n.f; c+=n.c; matched.push(food); }
+  if(!text) return {p:0,f:0,c:0,matched:[]};
+  try{
+    // 全角→半角・改行→スペースに正規化
+    const t = text
+      .replace(/[０-９]/g, ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0))
+      .replace(/[Ｐｐ]/g,'P').replace(/[Ｆｆ]/g,'F').replace(/[Ｃｃ]/g,'C')
+      .replace(/[：]/g,':').replace(/[\r\n]+/g,' ');
+
+    let p=0, f=0, c=0, matched=[];
+
+    // 食材辞書マッチ
+    for(const [food, n] of Object.entries(NUTRITION_DB)){
+      if(t.includes(food)){ p+=n.p; f+=n.f; c+=n.c; matched.push(food); }
+    }
+
+    // 直書き栄養素を優先（全角・空白・コロン・「約」・小数点に対応）
+    // 例: 「P: 39.5g」「P（タンパク質）：約39.5g」「タンパク質：約 39.5 g」
+    const proM = t.match(/(?:[Pp][\s（(]?(?:タンパク質|たんぱく質|protein)?[\s）)]*[:：]?\s*約?\s*(\d+(?:\.\d+)?)\s*g)|(?:タンパク質|たんぱく質|プロテイン)\s*[:：]?\s*約?\s*(\d+(?:\.\d+)?)\s*g/i);
+    const fatM = t.match(/(?:[Ff][\s（(]?(?:脂質|fat)?[\s）)]*[:：]?\s*約?\s*(\d+(?:\.\d+)?)\s*g)|(?:脂質)\s*[:：]?\s*約?\s*(\d+(?:\.\d+)?)\s*g/i);
+    const carM = t.match(/(?:[Cc][\s（(]?(?:糖質|炭水化物|carb)?[\s）)]*[:：]?\s*約?\s*(\d+(?:\.\d+)?)\s*g)|(?:糖質|炭水化物)\s*[:：]?\s*約?\s*(\d+(?:\.\d+)?)\s*g/i);
+
+    if(proM){ const v=parseFloat(proM[1]||proM[2]); if(!isNaN(v)) p=v; }
+    if(fatM){ const v=parseFloat(fatM[1]||fatM[2]); if(!isNaN(v)) f=v; }
+    if(carM){ const v=parseFloat(carM[1]||carM[2]); if(!isNaN(v)) c=v; }
+
+    return { p:Math.round(p*10)/10, f:Math.round(f*10)/10, c:Math.round(c*10)/10, matched };
+  } catch(err){
+    console.error('[estimateNutrition] error:', err);
+    return {p:0,f:0,c:0,matched:[]};
   }
-  const proM = text.match(/(?:タンパク質|たんぱく質|プロテイン)\s*(\d+)\s*g/i);
-  if(proM) p = +proM[1];
-  return { p, f, c, matched };
 }
 
 // ════════════════════════════════════════════════════
@@ -925,97 +948,107 @@ function autoCategory(text){ return autoCategories(text)[0]; }
 //   「3時に就寝して13時に起床」
 //   「夜中の2時に寝て昼の1時に起きた」
 // ════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════
+// 睡眠時間抽出エンジン v4
+// 対応パターン:
+//   「消灯3:45 起床9:45」
+//   「Am 5時前に入眠し Am 11時ごろに目を覚ました」
+//   「23時に就寝して7時に起床」
+//   「3時に寝て13時に起きた」
+// ════════════════════════════════════════════════════
 function calculateSleepDuration(text){
   if(!text) return null;
+  try{
+    // 全角→半角、全角コロン→半角、改行→スペース
+    const t = text
+      .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      .replace(/[：]/g, ':')
+      .replace(/[\r\n]+/g, ' ');
 
-  // 全角→半角、改行→スペース
-  const t = text
-    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/[：]/g, ':')
-    .replace(/\n/g, ' ');
+    // 「半」→「:30」に前処理
+    const normalized = t.replace(/(\d{1,2})\s*時半/g, '$1:30');
 
-  // 「半」→「30分」に前処理
-  const normalized = t.replace(/(\d{1,2})\s*時半/g, '$1時30分');
-
-  // AM/PM考慮の時刻→10進数変換
-  function toH(hour, min, ampm, context){
-    let h = parseInt(hour), m = parseInt(min||0);
-    const ap = (ampm||'').toLowerCase().replace(/\s/g,'');
-    if(ap==='pm'||ap==='午後') { if(h<12) h+=12; }
-    else if(ap==='am'||ap==='午前') { if(h===12) h=0; }
-    else {
-      // AM/PM未記載の場合：文脈から推定
-      // 「夜中・深夜・就寝・夜」→深夜扱い（0〜5時 または 20〜23時）
-      // 「昼・午後・起きた・起床」→昼以降
-      if(/夜中|深夜|夜に寝|夜寝/.test(context) && h>=1 && h<=6) { /* そのまま */ }
-      else if(/昼|午後/.test(context) && h>=1 && h<=11) h+=12;
+    // AM/PM考慮の時刻→10進数変換
+    function toH(hour, min, ampm){
+      let h = parseInt(hour), m = parseInt(min||0);
+      const ap = (ampm||'').toLowerCase().replace(/\s/g,'');
+      if(ap==='pm'||ap==='午後'){ if(h<12) h+=12; }
+      else if(ap==='am'||ap==='午前'){ if(h===12) h=0; }
+      return h + m/60;
     }
-    return h + m/60;
-  }
 
-  // 入眠パターン（より広く）
-  const sleepPatterns = [
-    // 「am5時に入眠」「午前5時ごろ寝た」「5時30分に就寝」
-    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい|半)?\s*(?:に|ごろ|頃|ぐらい)?\s*(?:入眠|寝た|寝付|就寝|眠りにつ|眠った|ベッド|布団|寝ました|眠りました)/i,
-    // 「寝たのが5時」「就寝は23時」
-    /(?:寝たの|就寝は?|入眠は?|眠りについたの)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?/i,
-    // 「5時に寝て」「23時に就寝して」
-    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ)?\s*に\s*(?:寝て|就寝して|眠って)/i,
-  ];
+    // 入眠時刻パターン（HH:MM形式 + 「消灯」キーワード追加）
+    const sleepPatterns = [
+      // 「消灯3:45」「消灯 03:45」
+      /(?:消灯|就寝|入眠|寝|眠|ベッド|布団|寝付)\s*(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})/i,
+      // 「am5:30に寝た」「5:30に就寝」
+      /(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})\s*(?:に|ごろ|頃)?\s*(?:入眠|寝た|寝付|就寝|眠りにつ|眠った|ベッド|布団|寝ました|消灯)/i,
+      // 「am5時に入眠」「5時30分に就寝」（時→:変換後も含む）
+      /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:入眠|寝た|寝付|就寝|眠りにつ|眠った|ベッド|布団|寝ました|眠りました|消灯)/i,
+      // 「寝たのが5時」「就寝は23:30」
+      /(?:寝たの|就寝は?|入眠は?|消灯は?|眠りについたの)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})/i,
+      // 「5時に寝て」「23:00に就寝して」
+      /(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})\s*(?:に|ごろ)?\s*(?:寝て|就寝して|眠って|消灯して)/i,
+    ];
 
-  // 起床パターン（より広く）
-  const wakePatterns = [
-    // 「pm13時ごろ目を覚ました」「11時に起きた」
-    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい|半)?\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚めました)/i,
-    // 「起きたのが13時」「起床は7時」
-    /(?:起きたの|起床は?|目覚めは?)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?/i,
-    // 「13時に起きて」
-    /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ)?\s*に\s*(?:起きて|起床して)/i,
-  ];
+    // 起床時刻パターン（HH:MM形式対応）
+    const wakePatterns = [
+      // 「起床9:45」「起床 09:45」
+      /(?:起床|起き|目覚め|目を覚)\s*(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})/i,
+      // 「9:45に起きた」「pm13:00に起床」
+      /(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚めました)/i,
+      // 「pm13時ごろ目を覚ました」「11時に起きた」
+      /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚めました)/i,
+      // 「起きたのが13時」「起床は9:45」
+      /(?:起きたの|起床は?|目覚めは?)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})/i,
+      // 「13:00に起きて」
+      /(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})\s*(?:に|ごろ)?\s*(?:起きて|起床して)/i,
+    ];
 
-  let sleepH = null, wakeH = null;
-
-  for(const p of sleepPatterns){
-    const m = normalized.match(p);
-    if(m){
-      // グループ位置が正規表現によって異なる
-      const groups = [...m];
-      const ampm = groups.find((g,i)=>i>0&&/am|pm|午前|午後/i.test(g||''))||'';
-      const hourStr = groups.find((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')&&parseInt(g)<=24)||null;
-      const minStr  = groups.filter((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')).slice(1)[0]||'0';
-      if(hourStr){ sleepH = toH(hourStr, minStr, ampm, normalized); break; }
+    function matchTime(patterns, src){
+      for(const p of patterns){
+        const m = src.match(p);
+        if(!m) continue;
+        // グループから ampm・hour・min を取得
+        const groups = [...m].slice(1); // キャプチャグループのみ
+        // ampmはam/pm/午前/午後のどれか
+        const ampm    = groups.find(g => g && /^(am|pm|午前|午後)$/i.test(g)) || '';
+        // 数値グループをすべて取得
+        const nums    = groups.filter(g => g && /^\d+$/.test(g));
+        if(!nums.length) continue;
+        const hour = nums[0];
+        const min  = nums[1] || '0';
+        if(parseInt(hour) > 24) continue;
+        return toH(hour, min, ampm);
+      }
+      return null;
     }
+
+    let sleepH = matchTime(sleepPatterns, normalized);
+    let wakeH  = matchTime(wakePatterns,  normalized);
+
+    if(sleepH === null || wakeH === null) return null;
+
+    // 日またぎ判定
+    if(sleepH > wakeH) wakeH += 24;
+    const duration = Math.round((wakeH - sleepH) * 10) / 10;
+    if(duration <= 0 || duration > 16) return null;
+
+    const toHHMM = h => {
+      const hh = Math.floor(h % 24);
+      const mm = Math.round((h % 1) * 60);
+      return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+    };
+
+    return {
+      bed_time:   toHHMM(sleepH),
+      wake_time:  toHHMM(wakeH % 24),
+      duration_h: duration,
+    };
+  } catch(err){
+    console.error('[calculateSleepDuration] error:', err);
+    return null;
   }
-
-  for(const p of wakePatterns){
-    const m = normalized.match(p);
-    if(m){
-      const groups = [...m];
-      const ampm = groups.find((g,i)=>i>0&&/am|pm|午前|午後/i.test(g||''))||'';
-      const hourStr = groups.find((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')&&parseInt(g)<=24)||null;
-      const minStr  = groups.filter((g,i)=>i>0&&/^\d{1,2}$/.test(g||'')).slice(1)[0]||'0';
-      if(hourStr){ wakeH = toH(hourStr, minStr, ampm, normalized); break; }
-    }
-  }
-
-  if(sleepH===null||wakeH===null) return null;
-
-  // 日またぎ判定
-  if(sleepH > wakeH) wakeH += 24;
-  const duration = Math.round((wakeH - sleepH) * 10) / 10;
-  if(duration <= 0 || duration > 16) return null;
-
-  const toHHMM = h => {
-    const hh = Math.floor(h % 24);
-    const mm = Math.round((h % 1) * 60);
-    return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-  };
-
-  return {
-    bed_time:   toHHMM(sleepH),
-    wake_time:  toHHMM(wakeH % 24),
-    duration_h: duration,
-  };
 }
 
 // 旧名互換
@@ -1115,32 +1148,50 @@ function generateAIResponse(text, historyData){
     parts.push(msg);
   }
 
-  // ── 栄養士の分析（P/F/C推定＋過去比較）
+  // ── 栄養士の分析（直書き栄養素優先 + P/F/C推定 + 過去比較）
   if(KEYWORD_RULES.find(r=>r.cat==='meal')?.re.test(text)){
-    const nutr    = estimateNutrition(text);
-    const mealHistory = recent.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
-    const avgProtein  = mealHistory.filter(e=>e.details?.protein_g)
-      .reduce((s,e,_,a)=>s+e.details.protein_g/a.length, 0);
-    const mealDays    = recent.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
+    try{
+      const nutr       = estimateNutrition(text);
+      const mealHistory= recent.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+      const avgProtein = mealHistory.filter(e=>e.details?.protein_g)
+        .reduce((s,e,_,a)=>s+e.details.protein_g/a.length, 0);
+      const mealDays   = recent.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
+      // 直書き値があるかどうかの判定（「:39.5g」「: 約39.5g」など）
+      const hasDirectValue = /[:：]\s*約?\s*\d+(?:\.\d+)?\s*g/i.test(text) || /[PpＰｐ]\s*[:：]\s*\d/.test(text);
 
-    let msg = '【栄養士の分析】\n';
-    if(nutr.matched.length > 0){
-      msg += `${nutr.matched.slice(0,4).join('・')}を確認しました。`;
-      if(nutr.p > 0 || nutr.f > 0 || nutr.c > 0){
-        msg += `\n推定栄養素 → タンパク質:${nutr.p}g / 脂質:${nutr.f}g / 糖質:${nutr.c}g`;
+      let msg = '【栄養士の分析】\n';
+      if(nutr.p > 0 && hasDirectValue){
+        // 直書き栄養素を最優先
+        msg += `詳細な記録ありがとうございます。タンパク質${nutr.p}g`;
+        if(nutr.f > 0) msg += `・脂質${nutr.f}g`;
+        if(nutr.c > 0) msg += `・糖質${nutr.c}g`;
+        msg += `を確認しました。`;
+        if(nutr.p >= 30)      msg += `タンパク質${nutr.p}gは筋肉量増加に最適な数値です！運動後30分以内の摂取で吸収効率が最大化されます。`;
+        else if(nutr.p >= 20) msg += `良好なタンパク質量です。あと${(30-nutr.p).toFixed(1)}g追加できると筋肉合成がさらに促進されます。`;
+        else                  msg += `タンパク質はまだ余裕があります。鶏むね肉・卵・豆腐などで補うと理想的です。`;
+        if(avgProtein > 0){
+          const diff = Math.round((nutr.p - avgProtein)*10)/10;
+          msg += `\n直近平均(${Math.round(avgProtein)}g)比: ${diff>=0?'+':''}${diff}g。`;
+        }
+        if(nutr.f > 25) msg += `\n脂質がやや高めです。次の食事は和食中心（味噌汁・納豆・卵）にするとバランスが整います。`;
+      } else if(nutr.matched.length > 0){
+        msg += `${nutr.matched.slice(0,4).join('・')}を確認しました。`;
+        if(nutr.p > 0 || nutr.f > 0 || nutr.c > 0){
+          msg += `\n推定栄養素 → タンパク質:${nutr.p}g / 脂質:${nutr.f}g / 糖質:${nutr.c}g`;
+        }
+        if(avgProtein > 0){
+          const diffP = Math.round(nutr.p - avgProtein);
+          msg += `\n直近のタンパク質平均${Math.round(avgProtein)}gと比べると今回は${diffP>=0?'+':''}${diffP}g。`;
+        }
+        if(nutr.p >= 25)      msg += `\nタンパク質${nutr.p}gは筋肉合成に十分な量です。`;
+        else if(nutr.p >= 15) msg += `\nあと${25-nutr.p}g追加できれば理想的です（卵1個≒6g、豆腐100g≒5g）。`;
+        else if(nutr.p > 0)   msg += `\nタンパク質がやや少なめです。鶏むね肉・卵・豆腐などを1品追加するとボディメイクに直結します。`;
+        if(nutr.f > 25) msg += `\n脂質が高めです。次の食事では和食（味噌汁・納豆・卵）中心にすると消化にも優しくバランスが整います。`;
+      } else {
+        msg += `食事を記録しました。${mealDays>=5?`直近${mealDays}日間継続して食事記録できています！`:''}「タンパク質:30g」のように栄養素も記録すると詳細な分析ができます。`;
       }
-      if(avgProtein > 0){
-        const diffP = Math.round(nutr.p - avgProtein);
-        msg += `\n直近のタンパク質平均${Math.round(avgProtein)}gと比べると今回は${diffP>=0?'+':''}${diffP}g。`;
-      }
-      if(nutr.p >= 25) msg += `\nタンパク質${nutr.p}gは筋肉合成に十分な量です。運動後30分以内に摂取できると効率が最大化されます。`;
-      else if(nutr.p >= 15) msg += `\nタンパク質は確保できています。あと${25-nutr.p}g追加できれば理想的です（卵1個≒6g、豆腐100g≒5g）。`;
-      else if(nutr.p > 0) msg += `\nタンパク質がやや少なめです。鶏むね肉・卵・豆腐などを1品追加するとボディメイクに直結します。`;
-      if(nutr.f > 25) msg += `\n脂質が高めです。次の食事では和食（味噌汁・納豆・卵）中心にすると消化にも優しくバランスが整います。`;
-    } else {
-      msg += `食事を記録しました。${mealDays>=5?`直近${mealDays}日間継続して食事記録できています！`:''}食材名も含めて記録すると栄養素の推定ができます（例：鶏むね・卵・豆腐など）。`;
-    }
-    parts.push(msg);
+      parts.push(msg);
+    } catch(err){ console.error('[AI meal]', err); parts.push('【栄養士の分析】食事を記録しました。'); }
   }
 
   // ── トレーニング分析（週間データ比較）
@@ -1221,86 +1272,102 @@ function dummyAIComment(text){ return generateAIResponse(text); }
 //   ・ai_comment  = generateAIResponse の出力を保存
 // ════════════════════════════════════════════════════
 function parseTextLocal(text){
-  const entries = [];
-  const cats = autoCategories(text);
-  // AI コメントは全カテゴリを通じて1回だけ生成
-  const aiComment = generateAIResponse(text);
+  if(!text) return [];
+  // 改行を含む長文でも安全に処理するため全体をtry-catchで保護
+  try{
+    const entries = [];
+    const cats = autoCategories(text);
+    // AI コメントは全カテゴリを通じて1回だけ生成
+    let aiComment = '';
+    try{ aiComment = generateAIResponse(text); }
+    catch(e){ console.error('[generateAIResponse]', e); aiComment = ''; }
 
-  cats.forEach(cat => {
-    // ── details: 生テキストは必ず raw に保存（改変禁止）
-    const details = { raw: text, ai_comment: aiComment };
-    let summary = '';  // summary は数値・識別子のみ。表示には使わない
+    cats.forEach(cat => {
+      try{
+        // ── details: 生テキストは必ず raw に保存（改変禁止）
+        const details = { raw: text, ai_comment: aiComment };
+        let summary = '';
 
-    if(cat === 'sleep'){
-      // まず parseSleepTimes で曖昧テキストから時刻・時間を抽出
-      const parsed = parseSleepTimes(text);
-      if(parsed){
-        details.duration_h = parsed.duration_h;
-        details.bed_time   = parsed.bed_time;
-        details.wake_time  = parsed.wake_time;
-      } else {
-        // フォールバック: 「7時間」などの直書きパターン
-        const durM  = text.match(/(\d+(?:\.\d+)?)\s*時間/);
-        const bedM  = text.match(/(?:入眠|就寝|寝た)[^\d]*(\d{1,2})[時:：](\d{0,2})/);
-        const wakeM = text.match(/(?:起床|起きた)[^\d]*(\d{1,2})[時:：](\d{0,2})/);
-        if(durM)  details.duration_h = +durM[1];
-        if(bedM)  details.bed_time   = `${bedM[1].padStart(2,'0')}:${(bedM[2]||'00').padStart(2,'0')}`;
-        if(wakeM) details.wake_time  = `${wakeM[1].padStart(2,'0')}:${(wakeM[2]||'00').padStart(2,'0')}`;
+        if(cat === 'sleep'){
+          let parsed = null;
+          try{ parsed = parseSleepTimes(text); } catch(e){ console.error('[parseSleepTimes]',e); }
+          if(parsed){
+            details.duration_h = parsed.duration_h;
+            details.bed_time   = parsed.bed_time;
+            details.wake_time  = parsed.wake_time;
+          } else {
+            try{
+              const durM  = text.match(/(\d+(?:\.\d+)?)\s*時間/);
+              const bedM  = text.match(/(?:入眠|就寝|寝た|消灯)[^\d]*(\d{1,2})[:時](\d{0,2})/);
+              const wakeM = text.match(/(?:起床|起きた)[^\d]*(\d{1,2})[:時](\d{0,2})/);
+              if(durM)  details.duration_h = +durM[1];
+              if(bedM)  details.bed_time   = `${bedM[1].padStart(2,'0')}:${(bedM[2]||'00').padStart(2,'0')}`;
+              if(wakeM) details.wake_time  = `${wakeM[1].padStart(2,'0')}:${(wakeM[2]||'00').padStart(2,'0')}`;
+            } catch(e){ console.error('[sleep fallback]',e); }
+          }
+          details.medication = /眠剤|デエビゴ/.test(text);
+          details.mouthpiece = /マウスピース/.test(text);
+          const pts = [];
+          if(details.duration_h) pts.push(`${details.duration_h}h`);
+          if(details.bed_time)   pts.push(`就寝${details.bed_time}`);
+          if(details.wake_time)  pts.push(`起床${details.wake_time}`);
+          if(details.medication) pts.push('眠剤');
+          if(details.mouthpiece) pts.push('MP');
+          summary = pts.length ? pts.join(' ') : '睡眠';
+        }
+        else if(cat === 'meal'){
+          try{
+            const calM  = text.match(/(\d+)\s*kcal/i);
+            const typeM = text.match(/朝食|昼食|夕食|間食|朝ごはん|昼ごはん|夕ごはん/);
+            if(calM)  details.calories_est = +calM[1];
+            if(typeM) details.meal_type    = typeM[0];
+            const nutr = estimateNutrition(text);
+            details.protein_g = nutr.p || null;
+            details.fat_g     = nutr.f || null;
+            details.carbs_g   = nutr.c || null;
+            const pts = [];
+            if(details.meal_type)    pts.push(details.meal_type);
+            if(details.protein_g)    pts.push(`P:${details.protein_g}g`);
+            if(details.fat_g)        pts.push(`F:${details.fat_g}g`);
+            if(details.calories_est) pts.push(`${details.calories_est}kcal`);
+            summary = pts.length ? pts.join(' ') : '食事';
+          } catch(e){ console.error('[meal parse]',e); summary='食事'; }
+        }
+        else if(cat === 'body'){
+          const durM = text.match(/(\d+)\s*分/);
+          const typM = text.match(/筋トレ|ジョギング|ウォーキング|散歩|ランニング|ジム|ストレッチ|スクワット/);
+          if(durM) details.duration_min  = +durM[1];
+          if(typM) details.exercise_type = typM[0];
+          summary = [details.exercise_type, details.duration_min?`${details.duration_min}分`:''].filter(Boolean).join(' ') || '運動';
+        }
+        else if(cat === 'finance'){
+          const amtM = text.match(/(\d[\d,]*)\s*円/);
+          const isInc = /収入|給料/.test(text);
+          if(amtM){ details.amount = +amtM[1].replace(/,/g,''); details.transaction_type = isInc?'income':'expense'; }
+          summary = details.amount ? `${isInc?'収入':'支出'} ¥${details.amount.toLocaleString()}` : '収支';
+        }
+        else if(cat === 'skin'){
+          const st = ['乾燥肌','ニキビ','赤み','脂っぽ','くすみ'].filter(k=>text.includes(k));
+          summary = st.length ? st.join('・') : '肌';
+        }
+        else {
+          summary = 'その他';
+        }
+
+        entries.push({ category:cat, categories:cats, summary, details, ts:Date.now() });
+      } catch(e){
+        // カテゴリ処理が失敗しても生テキストだけは保存
+        console.error('[parseTextLocal cat error]', cat, e);
+        entries.push({ category:cat, categories:cats, summary:'記録', details:{raw:text}, ts:Date.now() });
       }
-      details.medication = /眠剤|デエビゴ/.test(text);
-      details.mouthpiece = /マウスピース/.test(text);
-      // summary = 識別子のみ（生テキストを含まない）
-      const parts = [];
-      if(details.duration_h) parts.push(`${details.duration_h}h`);
-      if(details.bed_time)   parts.push(`就寝${details.bed_time}`);
-      if(details.wake_time)  parts.push(`起床${details.wake_time}`);
-      if(details.medication) parts.push('眠剤');
-      if(details.mouthpiece) parts.push('MP');
-      summary = parts.length ? parts.join(' ') : '睡眠';
-    }
-    else if(cat === 'meal'){
-      const calM  = text.match(/(\d+)\s*kcal/i);
-      const proM  = text.match(/(?:タンパク質|たんぱく質|プロテイン)\s*(\d+)\s*g/i);
-      const typeM = text.match(/朝食|昼食|夕食|間食|朝ごはん|昼ごはん|夕ごはん/);
-      if(calM)  details.calories_est = +calM[1];
-      if(typeM) details.meal_type    = typeM[0];
-      // 栄養素推定（食材辞書ベース）
-      const nutr = estimateNutrition(text);
-      details.protein_g = proM ? +proM[1] : (nutr.p || null);
-      details.fat_g     = nutr.f || null;
-      details.carbs_g   = nutr.c || null;
-      const parts = [];
-      if(details.meal_type)    parts.push(details.meal_type);
-      if(details.protein_g)    parts.push(`P:${details.protein_g}g`);
-      if(details.fat_g)        parts.push(`F:${details.fat_g}g`);
-      if(details.calories_est) parts.push(`${details.calories_est}kcal`);
-      summary = parts.length ? parts.join(' ') : '食事';
-    }
-    else if(cat === 'body'){
-      const durM = text.match(/(\d+)\s*分/);
-      const typM = text.match(/筋トレ|ジョギング|ウォーキング|散歩|ランニング|ジム|ストレッチ|スクワット/);
-      if(durM) details.duration_min  = +durM[1];
-      if(typM) details.exercise_type = typM[0];
-      summary = [details.exercise_type, details.duration_min?`${details.duration_min}分`:''].filter(Boolean).join(' ') || '運動';
-    }
-    else if(cat === 'finance'){
-      const amtM = text.match(/(\d[\d,]*)\s*円/);
-      const isInc = /収入|給料/.test(text);
-      if(amtM){ details.amount = +amtM[1].replace(/,/g,''); details.transaction_type = isInc?'income':'expense'; }
-      summary = details.amount ? `${isInc?'収入':'支出'} ¥${details.amount.toLocaleString()}` : '収支';
-    }
-    else if(cat === 'skin'){
-      const st = ['乾燥肌','ニキビ','赤み','脂っぽ','くすみ'].filter(k=>text.includes(k));
-      summary = st.length ? st.join('・') : '肌';
-    }
-    else {
-      summary = 'その他';
-    }
+    });
 
-    entries.push({ category:cat, categories:cats, summary, details, ts:Date.now() });
-  });
-
-  return entries;
+    return entries;
+  } catch(e){
+    // 全体クラッシュ時も生テキストだけは保存
+    console.error('[parseTextLocal fatal]', e);
+    return [{ category:'other', categories:['other'], summary:'記録', details:{raw:text}, ts:Date.now() }];
+  }
 }
 
 // ════════════════════════════════════════════════════
@@ -1428,24 +1495,23 @@ function showFeedbackPreview(entries, aiComment, usedRealAI){
 let _isSaving = false;  // 二重保存防止フラグ
 
 function commitSave(){
-  // ── 二重保存ガード
   if(_isSaving){ return; }
   if(!pendingEntries.length){ showToast('保存する内容がありません'); return; }
-
   _isSaving = true;
 
   try{
     const targetDate = saveDate || todayKey;
-    // pendingEntriesを先にコピーしてからクリア（クロージャ問題防止）
-    // ai_comment が未設定のエントリに生成してセット
+
+    // ai_commentが未設定のエントリに生成（失敗しても保存は続行）
     const toSave = pendingEntries.slice().map(e=>{
       if(e.details && !e.details.ai_comment && e.details.raw){
-        e.details.ai_comment = generateAIResponse(e.details.raw);
+        try{ e.details.ai_comment = generateAIResponse(e.details.raw); }
+        catch(err){ console.error('[commitSave ai_comment]', err); }
       }
       return e;
     });
-    pendingEntries = [];  // 先にクリアして二重呼び出しを防ぐ
-    pendingAiComment = '';
+    pendingEntries  = [];
+    pendingAiComment= '';
 
     const all = getAll();
     const idx = all.findIndex(d=>d.date===targetDate);
@@ -1459,13 +1525,22 @@ function commitSave(){
       all.push(ne);
     }
     all.sort((a,b)=>b.date.localeCompare(a.date));
-    S('kiroku_entries', all);
 
-    // liveResults を更新（saveToday との二重保存を防ぐため liveResults には追加しない）
+    // localStorage保存（失敗時はサイズ超過の可能性があるため写真を除いて再試行）
+    try{
+      S('kiroku_entries', all);
+    } catch(storageErr){
+      console.error('[commitSave storage]', storageErr);
+      // 写真データを除いて保存を再試行
+      const allNoPhoto = JSON.parse(JSON.stringify(all));
+      allNoPhoto.forEach(d=>(d.entries||[]).forEach(e=>{ if(e.details?.photo_b64) delete e.details.photo_b64; }));
+      try{ S('kiroku_entries', allNoPhoto); showToast('写真を除いて保存しました（容量不足）'); }
+      catch(e2){ showToast('保存に失敗しました。バックアップをお試しください。'); return; }
+    }
+
     S('live_'+todayKey, {entries:[], photos:[]});
     liveResults = {entries:[], photos:[]};
 
-    // UI リセット
     attachedPhotos = {meal:[], skin:[], receipt:[]};
     ['meal','skin','receipt'].forEach(t=>renderPhotoRow(t));
     const fb = document.getElementById('ai-feedback');
@@ -1473,8 +1548,25 @@ function commitSave(){
     const ta = document.getElementById('ta'); if(ta) ta.value='';
     refreshLive();
     showToast(`${targetDate} に保存しました ✓`);
+  } catch(err){
+    console.error('[commitSave fatal]', err);
+    // 最低限、生テキストだけは保存する
+    try{
+      const rawText = document.getElementById('ta')?.value || '';
+      if(rawText){
+        const all = getAll();
+        const targetDate = saveDate || todayKey;
+        const idx = all.findIndex(d=>d.date===targetDate);
+        const fallbackEntry = {category:'other',categories:['other'],summary:'記録',details:{raw:rawText},ts:Date.now()};
+        if(idx>=0){ all[idx].entries=[...(all[idx].entries||[]),fallbackEntry]; }
+        else { all.push({date:targetDate,ts:Date.now(),entries:[fallbackEntry]}); }
+        S('kiroku_entries', all);
+        showToast('エラーが発生しましたが生テキストを保存しました');
+      } else {
+        showToast('保存に失敗しました');
+      }
+    } catch(e2){ console.error('[commitSave fallback]', e2); showToast('保存に失敗しました'); }
   } finally {
-    // 必ずフラグを解除
     setTimeout(()=>{ _isSaving = false; }, 300);
   }
 }
