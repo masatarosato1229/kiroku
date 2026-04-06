@@ -503,15 +503,18 @@ function estimateNutrition(text){
 // べき等実装。バージョン番号を上げると次回起動時に再適用。
 // ════════════════════════════════════════════════════
 function migrateData(){
-  const DATA_VERSION = 5;  // v5: parseSleepTimes で既存データの睡眠時間を再抽出
+  const DATA_VERSION = 6;  // v6: 拡張食材キーワードで過去データのカテゴリを全件再判定
   if(L('kiroku_migration_ver',0) >= DATA_VERSION) return;
 
+  // 最新の KEYWORD_RULES と同じルール（定義順序の都合でここに独立定義）
   const MIG = [
-    { cat:'sleep',   re:/睡眠|起床|就寝|入眠|寝た|寝付|眠り|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|ベッド|布団|起きた|pm.*起|am.*眠|眠りにつ|寝落ち|目が覚/ },
-    { cat:'meal',    re:/食事|食べ|朝食|昼食|夕食|ご飯|焼肉|ハラミ|カルビ|豆腐|冷奴|納豆|ヨーグルト|サラダ|タンパク質|たんぱく質|プロテイン|カロリー|ランチ|ディナー/ },
-    { cat:'skin',    re:/肌荒れ|肌の調子|ニキビ|乾燥肌|脂っぽ|毛穴|保湿|スキンケア|洗顔|赤み|くすみ/ },
-    { cat:'body',    re:/運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|体重測定/ },
-    { cat:'finance', re:/\d+円|支出|収入|交通費|食費|支払い|給料|節約|出費|レシート/ },
+    { cat:'sleep',
+      re:/睡眠|起床|就寝|入眠|寝た|寝付|眠り|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|ベッド|布団|眠りにつ|寝落ち|目を覚|起きた時|時に起き|消灯/ },
+    { cat:'meal',
+      re:/食事|食べ|朝食|昼食|夕食|ご飯|米|麦|パン|麺|うどん|そば|パスタ|ラーメン|焼肉|ハラミ|カルビ|豚カツ|唐揚げ|豆腐|冷奴|納豆|卵|生卵|目玉焼き|鶏むね|鶏もも|鶏肉|豚肉|牛肉|魚|刺身|サーモン|マグロ|サラダ|味噌汁|ヨーグルト|ランチ|ディナー|朝ごはん|昼ごはん|夕ごはん|タンパク質|たんぱく質|プロテイン|ポタージュ|スープ|シチュー|カレー|丼|定食|弁当|おかず|野菜|ブロッコリー|ほうれん草|トマト|きゅうり|にんじん|果物|バナナ|りんご|みかん|牛乳|チーズ|ナッツ|アーモンド|グラム|kcal|カロリー|栄養/ },
+    { cat:'skin',    re:/肌荒れ|肌の調子|ニキビ|乾燥肌|脂っぽ|毛穴|保湿|スキンケア|洗顔|赤み|くすみ|化粧水|肌が/ },
+    { cat:'body',    re:/運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|腹筋|散歩した|体重測定|体脂肪/ },
+    { cat:'finance', re:/\d+円|支出|収入|交通費|食費|支払い|給料|節約|出費|レシート|コンビニで|スーパーで/ },
   ];
 
   let all = L('kiroku_entries',[]); let changed = false;
@@ -519,33 +522,37 @@ function migrateData(){
     (day.entries||[]).forEach(e => {
       const t = e.details?.raw || e.summary || '';
 
-      // パッチ1: categories を最新ルールで再付与
+      // パッチ1: 最新ルールでカテゴリを全件再判定（v6: 食材キーワード大幅拡張）
       const cats = MIG.filter(r=>r.re.test(t)).map(r=>r.cat);
       const newCats = cats.length ? cats : ['other'];
       if(JSON.stringify(e.categories) !== JSON.stringify(newCats)){
         e.categories = newCats; e.category = newCats[0]; changed = true;
       }
 
-      // パッチ2: 睡眠エントリで duration_h が未設定なら parseSleepTimes で再計算
-      if(e.category === 'sleep' && !e.details?.duration_h && t){
-        const parsed = parseSleepTimes(t);
-        if(parsed){
-          if(!e.details) e.details = {};
-          e.details.duration_h = parsed.duration_h;
-          e.details.bed_time   = e.details.bed_time  || parsed.bed_time;
-          e.details.wake_time  = e.details.wake_time || parsed.wake_time;
-          changed = true;
-        }
+      // パッチ2: 睡眠エントリで duration_h が未設定なら再計算
+      if((e.category==='sleep'||(e.categories||[]).includes('sleep')) && !e.details?.duration_h && t){
+        try{
+          const parsed = parseSleepTimes(t);
+          if(parsed){
+            if(!e.details) e.details = {};
+            e.details.duration_h = parsed.duration_h;
+            e.details.bed_time   = e.details.bed_time  || parsed.bed_time;
+            e.details.wake_time  = e.details.wake_time || parsed.wake_time;
+            changed = true;
+          }
+        } catch(err){}
       }
 
-      // パッチ3: 食事エントリで protein_g が未設定なら estimateNutrition で推定
-      if(e.category === 'meal' && !e.details?.protein_g && t){
-        const nutr = estimateNutrition(t);
-        if(nutr.p > 0){
-          if(!e.details) e.details = {};
-          e.details.protein_g = nutr.p;
-          changed = true;
-        }
+      // パッチ3: 食事エントリで protein_g が未設定なら推定
+      if((e.category==='meal'||(e.categories||[]).includes('meal')) && !e.details?.protein_g && t){
+        try{
+          const nutr = estimateNutrition(t);
+          if(nutr.p > 0){
+            if(!e.details) e.details = {};
+            e.details.protein_g = nutr.p;
+            changed = true;
+          }
+        } catch(err){}
       }
 
       // パッチ4: details.raw 補完
@@ -558,7 +565,7 @@ function migrateData(){
   });
   if(changed) S('kiroku_entries', all);
   S('kiroku_migration_ver', DATA_VERSION);
-  console.log('[kiroku] migration v5 applied');
+  console.log('[kiroku] migration v6 applied - categories re-evaluated with expanded food keywords');
 }
 
 migrateData();          // ← 新：カテゴリ再付与など最新ロジックをまとめて適用
@@ -913,9 +920,10 @@ function detectDateFromText(text){
 // ════════════════════════════════════════════════════
 const KEYWORD_RULES = [
   { cat:'sleep',
-    re: /睡眠|起床|就寝|入眠|寝た|寝付|眠り|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|ベッド|布団|眠りにつ|寝落ち|目を覚|起きた時|時に起き/ },
+    re: /睡眠|起床|就寝|入眠|寝た|寝付|眠り|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|ベッド|布団|眠りにつ|寝落ち|目を覚|起きた時|時に起き|消灯/ },
   { cat:'meal',
-    re: /食事|食べ|朝食|昼食|夕食|ご飯|焼肉|ハラミ|カルビ|豚カツ|唐揚げ|豆腐|冷奴|納豆|鶏むね|鶏もも|サラダ|味噌汁|ヨーグルト|ランチ|ディナー|朝ごはん|昼ごはん|夕ごはん|タンパク質|たんぱく質|プロテイン/ },
+    // 食材・食事関連を幅広くカバー（米・卵・肉・魚・野菜・スープ等）
+    re: /食事|食べ|朝食|昼食|夕食|ご飯|米|麦|パン|麺|うどん|そば|パスタ|ラーメン|焼肉|ハラミ|カルビ|豚カツ|唐揚げ|豆腐|冷奴|納豆|卵|生卵|目玉焼き|鶏むね|鶏もも|鶏肉|豚肉|牛肉|魚|刺身|サーモン|マグロ|サラダ|味噌汁|ヨーグルト|ランチ|ディナー|朝ごはん|昼ごはん|夕ごはん|タンパク質|たんぱく質|プロテイン|ポタージュ|スープ|シチュー|カレー|丼|定食|弁当|おかず|野菜|ブロッコリー|ほうれん草|トマト|きゅうり|にんじん|果物|バナナ|りんご|みかん|牛乳|チーズ|ナッツ|アーモンド|グラム|kcal|カロリー|栄養/ },
   { cat:'skin',
     re: /肌荒れ|肌の調子|ニキビ|乾燥肌|脂っぽ|毛穴|保湿|スキンケア|洗顔|赤み|くすみ|化粧水|肌が/ },
   { cat:'body',
@@ -1469,10 +1477,16 @@ function showFeedbackPreview(entries, aiComment, usedRealAI){
   const entriesHtml = entries.map((e,i) => {
     const cats = e.categories || [e.category];
     const tagHtml = cats.map(c=>`<span class="cat-pill ${CAT_CLS[c]||'cp-other'}">${CAT_LBL[c]||c}</span>`).join('');
+    // プレビューは生テキスト(raw)を表示。rawがなければsummaryにフォールバック
+    const displayText = (e.details?.raw || e.summary || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    // 長文は3行で省略
+    const previewStyle = 'font-size:12px;color:var(--chalk2);margin-top:5px;line-height:1.7;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;word-break:break-all';
     return `<div class="fb-entry">
       <div style="flex:1">
         <div class="fb-tags">${tagHtml}</div>
-        <div style="font-size:12px;color:var(--chalk2);margin-top:5px;line-height:1.7">${e.summary}</div>
+        <div style="${previewStyle}">${displayText}</div>
+        ${e.details?.duration_h ? `<div style="font-size:10px;color:#a0c0e8;margin-top:3px">💤 ${e.details.duration_h}h${e.details.bed_time?' ('+e.details.bed_time+'〜'+(e.details.wake_time||'?')+')':''}</div>` : ''}
+        ${e.details?.protein_g ? `<div style="font-size:10px;color:#f0d0a8;margin-top:3px">P:${e.details.protein_g}g${e.details.fat_g?' F:'+e.details.fat_g+'g':''}</div>` : ''}
       </div>
     </div>`;
   }).join('');
