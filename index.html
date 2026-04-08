@@ -503,7 +503,7 @@ function estimateNutrition(text){
 // べき等実装。バージョン番号を上げると次回起動時に再適用。
 // ════════════════════════════════════════════════════
 function migrateData(){
-  const DATA_VERSION = 6;  // v6: 拡張食材キーワードで過去データのカテゴリを全件再判定
+  const DATA_VERSION = 7;  // v7: 睡眠時間抽出パターン大幅強化（消灯時間・まで眠った等）対応
   if(L('kiroku_migration_ver',0) >= DATA_VERSION) return;
 
   // 最新の KEYWORD_RULES と同じルール（定義順序の都合でここに独立定義）
@@ -529,15 +529,15 @@ function migrateData(){
         e.categories = newCats; e.category = newCats[0]; changed = true;
       }
 
-      // パッチ2: 睡眠エントリで duration_h が未設定なら再計算
-      if((e.category==='sleep'||(e.categories||[]).includes('sleep')) && !e.details?.duration_h && t){
+      // パッチ2: 睡眠エントリの duration_h を強化パーサーで再計算（既存値も上書き）
+      if((e.category==='sleep'||(e.categories||[]).includes('sleep')) && t){
         try{
           const parsed = parseSleepTimes(t);
           if(parsed){
             if(!e.details) e.details = {};
             e.details.duration_h = parsed.duration_h;
-            e.details.bed_time   = e.details.bed_time  || parsed.bed_time;
-            e.details.wake_time  = e.details.wake_time || parsed.wake_time;
+            e.details.bed_time   = parsed.bed_time;
+            e.details.wake_time  = parsed.wake_time;
             changed = true;
           }
         } catch(err){}
@@ -973,8 +973,8 @@ function calculateSleepDuration(text){
       .replace(/[：]/g, ':')
       .replace(/[\r\n]+/g, ' ');
 
-    // 「半」→「:30」に前処理
-    const normalized = t.replace(/(\d{1,2})\s*時半/g, '$1:30');
+    // 「半」→「:30」に前処理（「4時半」→「4:30」）
+    const n = t.replace(/(\d{1,2})\s*時半/g, '$1:30');
 
     // AM/PM考慮の時刻→10進数変換
     function toH(hour, min, ampm){
@@ -985,44 +985,50 @@ function calculateSleepDuration(text){
       return h + m/60;
     }
 
-    // 入眠時刻パターン（HH:MM形式 + 「消灯」キーワード追加）
+    // ── 入眠パターン（実際のユーザー入力に基づく網羅的パターン）
     const sleepPatterns = [
-      // 「消灯3:45」「消灯 03:45」
-      /(?:消灯|就寝|入眠|寝|眠|ベッド|布団|寝付)\s*(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})/i,
-      // 「am5:30に寝た」「5:30に就寝」
-      /(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})\s*(?:に|ごろ|頃)?\s*(?:入眠|寝た|寝付|就寝|眠りにつ|眠った|ベッド|布団|寝ました|消灯)/i,
-      // 「am5時に入眠」「5時30分に就寝」（時→:変換後も含む）
-      /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:入眠|寝た|寝付|就寝|眠りにつ|眠った|ベッド|布団|寝ました|眠りました|消灯)/i,
-      // 「寝たのが5時」「就寝は23:30」
-      /(?:寝たの|就寝は?|入眠は?|消灯は?|眠りについたの)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})/i,
-      // 「5時に寝て」「23:00に就寝して」
-      /(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})\s*(?:に|ごろ)?\s*(?:寝て|就寝して|眠って|消灯して)/i,
+      // 「消灯時間がam 2:30」「就寝時間はpm 11時」のように「〜時間が/は」形式
+      /(?:消灯|就寝|入眠|おやすみ)時間\s*(?:が|は|:)?\s*(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})/i,
+      // 「消灯3:45」「就寝23:00」のように直後に時刻
+      /(?:消灯|就寝|入眠)\s*(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})/i,
+      // 「am 4:30ぐらいに眠りにつ」「am5:30に寝た」
+      /(am|pm|午前|午後)\s*(\d{1,2}):(\d{2})\s*(?:ごろ|頃|ぐらい|くらい|過ぎ|前|ほど)?\s*(?:に|ごろ|頃)?\s*(?:眠りにつ|眠りについ|寝た|寝付|就寝|入眠|眠った|ベッド|布団|寝ました)/i,
+      // 「5:30に就寝」「23:00に眠りにつ」（AM/PMなし）
+      /(\d{1,2}):(\d{2})\s*(?:ごろ|頃|ぐらい|くらい|過ぎ)?\s*(?:に|ごろ)?\s*(?:眠りにつ|眠りについ|寝た|寝付|就寝|入眠|眠った|消灯)/i,
+      // 「am5時過ぎに眠りにつ」「AM 3時過ぎに眠りにつ」
+      /(am|pm|午前|午後)\s*(\d{1,2})\s*時\s*(?:(\d{1,2})\s*分)?\s*(?:過ぎ|前|ごろ|頃|ぐらい|くらい|ほど)?\s*(?:に|ごろ|頃)?\s*(?:眠りにつ|眠りについ|寝た|寝付|就寝|入眠|眠った|ベッド|布団|寝ました|眠りました|消灯)/i,
+      // 「5時ごろに眠りにつ」「23時に就寝」（AM/PMなし）
+      /(\d{1,2})\s*時\s*(?:(\d{1,2})\s*分)?\s*(?:過ぎ|前|ごろ|頃|ぐらい|くらい|ほど)?\s*(?:に|ごろ|頃)?\s*(?:眠りにつ|眠りについ|寝た|寝付|就寝|入眠|眠った|ベッド|布団|消灯)/i,
+      // 「寝たのが5時」「就寝は23時」「消灯はam2時半」
+      /(?:寝たの|就寝は?|入眠は?|消灯は?|おやすみは?|眠りについたの)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})/i,
     ];
 
-    // 起床時刻パターン（HH:MM形式対応）
+    // ── 起床パターン（「まで眠った」「Pm13時過ぎでした」形式も追加）
     const wakePatterns = [
-      // 「起床9:45」「起床 09:45」
-      /(?:起床|起き|目覚め|目を覚)\s*(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})/i,
-      // 「9:45に起きた」「pm13:00に起床」
-      /(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚めました)/i,
-      // 「pm13時ごろ目を覚ました」「11時に起きた」
-      /(am|pm|午前|午後)?\s*(\d{1,2})\s*時(?:(\d{1,2})\s*分)?\s*(?:前|過ぎ|ごろ|頃|ぐらい|くらい)?\s*(?:に|ごろ|頃)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚めました)/i,
-      // 「起きたのが13時」「起床は9:45」
+      // 「起床時間はam 9:30」「起床時間が9時」
+      /(?:起床|起き|目覚め)時間\s*(?:が|は|:)?\s*(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})/i,
+      // 「起床9:45」「起き9:30ごろ」
+      /(?:起床|起き|目覚め)\s*(am|pm|午前|午後)?\s*(\d{1,2}):(\d{2})/i,
+      // 「Pm13時過ぎでした」「pm 4時過ぎまで眠った」— AM/PM付きで後ろに文脈なし
+      /(am|pm|午前|午後)\s*(\d{1,2})\s*時\s*(?:(\d{1,2})\s*分)?\s*(?:過ぎ|前|ごろ|頃|ぐらい|くらい|ほど)?\s*(?:に|まで|ごろ|頃|で)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚えました|眠ってしまいました|まで眠|目を覚ま|でした|になりました)/i,
+      // 「am9:30ごろに起き」「pm1:00過ぎに起きた」
+      /(am|pm|午前|午後)\s*(\d{1,2}):(\d{2})\s*(?:ごろ|頃|ぐらい|くらい|過ぎ|前|ほど)?\s*(?:に|まで|ごろ)?\s*(?:起き|起床|目覚め|目を覚|起きました|眠ってしまいました|まで眠)/i,
+      // 「9:45に起きた」「13:00に起床」（AM/PMなし）
+      /(\d{1,2}):(\d{2})\s*(?:ごろ|頃|くらい|過ぎ)?\s*(?:に|まで)?\s*(?:起き|起床|目覚め|目を覚|起きました)/i,
+      // 「13時に起きた」「9時半ごろに起床」（AM/PMなし）
+      /(\d{1,2})\s*時\s*(?:(\d{1,2})\s*分)?\s*(?:過ぎ|前|ごろ|頃|ぐらい|くらい|ほど)?\s*(?:に|まで|ごろ|頃)?\s*(?:起き|起床|目覚め|目を覚|起きました|起床しました|目が覚えました)/i,
+      // 「起きたのが13時」「起床はam9時半」
       /(?:起きたの|起床は?|目覚めは?)\s*(?:が|は)?\s*(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})/i,
-      // 「13:00に起きて」
-      /(am|pm|午前|午後)?\s*(\d{1,2})[:時](\d{0,2})\s*(?:に|ごろ)?\s*(?:起きて|起床して)/i,
     ];
 
+    // マッチして ampm・hour・min を取り出す汎用関数
     function matchTime(patterns, src){
       for(const p of patterns){
         const m = src.match(p);
         if(!m) continue;
-        // グループから ampm・hour・min を取得
-        const groups = [...m].slice(1); // キャプチャグループのみ
-        // ampmはam/pm/午前/午後のどれか
-        const ampm    = groups.find(g => g && /^(am|pm|午前|午後)$/i.test(g)) || '';
-        // 数値グループをすべて取得
-        const nums    = groups.filter(g => g && /^\d+$/.test(g));
+        const groups = [...m].slice(1);
+        const ampm = groups.find(g => g && /^(am|pm|午前|午後)$/i.test(g)) || '';
+        const nums  = groups.filter(g => g && /^\d+$/.test(g));
         if(!nums.length) continue;
         const hour = nums[0];
         const min  = nums[1] || '0';
@@ -1032,15 +1038,15 @@ function calculateSleepDuration(text){
       return null;
     }
 
-    let sleepH = matchTime(sleepPatterns, normalized);
-    let wakeH  = matchTime(wakePatterns,  normalized);
+    let sleepH = matchTime(sleepPatterns, n);
+    let wakeH  = matchTime(wakePatterns,  n);
 
     if(sleepH === null || wakeH === null) return null;
 
-    // 日またぎ判定
+    // 日またぎ判定（就寝 > 起床 → 翌日起床）
     if(sleepH > wakeH) wakeH += 24;
     const duration = Math.round((wakeH - sleepH) * 10) / 10;
-    if(duration <= 0 || duration > 16) return null;
+    if(duration <= 0 || duration > 18) return null;
 
     const toHHMM = h => {
       const hh = Math.floor(h % 24);
@@ -1418,20 +1424,54 @@ async function runAnalyze(e){
     if(text) pendingEntries = parseTextLocal(text);
 
     // ── 実AI呼び出し（失敗したらローカル解析で続行）
+    // ローカル解析結果を保持しておく（睡眠時間などはローカル計算が正確なため）
+    const localEntries = pendingEntries.slice();
     let usedRealAI = false;
     if(text && pendingEntries.length){
       try{
-        const prompt = `以下は生活記録テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","categories":["sleep","meal"等複数可],"summary":"50字以内","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"protein_g":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","raw":"テキスト原文"}}]}\n複数カテゴリの記録は別entryで分けること。`;
+        const prompt = `以下は生活記録テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","categories":["sleep","meal"等複数可],"summary":"50字以内","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"protein_g":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","raw":"テキスト原文"}}]}\n必ず睡眠と食事が両方含まれる場合は両方のentryを出すこと。複数カテゴリの記録は別entryで分けること。`;
         const res = await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:prompt}] }) });
         const d = await res.json();
         const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
         const parsed = JSON.parse(raw);
         if(parsed.entries?.length){
-          pendingEntries = parsed.entries.map(en=>{
+          const aiEntries = parsed.entries.map(en=>{
             if(!en.categories||!en.categories.length) en.categories=[en.category||'other'];
             en.ts=Date.now(); en.details=en.details||{}; if(!en.details.raw) en.details.raw=text;
+
+            // 睡眠エントリの duration_h は必ずローカル計算値で補完（APIは不正確なことが多い）
+            if(en.category==='sleep'||(en.categories||[]).includes('sleep')){
+              const localSleep = localEntries.find(e=>e.category==='sleep');
+              if(localSleep?.details?.duration_h){
+                en.details.duration_h = localSleep.details.duration_h;
+                en.details.bed_time   = en.details.bed_time  || localSleep.details.bed_time;
+                en.details.wake_time  = en.details.wake_time || localSleep.details.wake_time;
+              }
+              // ローカル計算で直接取得も試みる
+              if(!en.details.duration_h){
+                try{
+                  const calc = calculateSleepDuration(text);
+                  if(calc){ en.details.duration_h=calc.duration_h; en.details.bed_time=calc.bed_time; en.details.wake_time=calc.wake_time; }
+                }catch(err){}
+              }
+              en.details.medication = en.details.medication ?? /眠剤|デエビゴ/.test(text);
+              en.details.mouthpiece = en.details.mouthpiece ?? /マウスピース/.test(text);
+            }
             return en;
           });
+
+          // APIレスポンスにないカテゴリはローカル解析から補完
+          // （例：APIが食事だけ返して睡眠を忘れた場合、ローカルの睡眠エントリを追加）
+          const aiCats = new Set(aiEntries.flatMap(e=>e.categories||[e.category]));
+          const localCats = new Set(localEntries.flatMap(e=>e.categories||[e.category]));
+          for(const cat of localCats){
+            if(!aiCats.has(cat)){
+              const missing = localEntries.filter(e=>(e.categories||[e.category]).includes(cat));
+              aiEntries.push(...missing);
+            }
+          }
+
+          pendingEntries = aiEntries;
           usedRealAI = true;
         }
       }catch(err){ console.log('AI unavailable, using local parse'); }
