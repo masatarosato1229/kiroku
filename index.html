@@ -198,6 +198,8 @@ body::before {
 .cp-skin   { background:rgba(200,112,96,.2);  color:#e8a098; }
 .cp-body   { background:rgba(112,168,128,.2); color:#90c8a0; }
 .cp-finance{ background:rgba(184,160,96,.2);  color:#e0c880; }
+.cp-temp   { background:rgba(220,100,80,.2);  color:#f0a090; }
+.cp-weight { background:rgba(140,200,140,.2); color:#90d090; }
 .cp-other  { background:rgba(255,255,255,.06);color:var(--chalk2); }
 .result-text { flex:1; font-size:12px; color:var(--chalk2); line-height:1.7; }
 .result-del { background:none; border:none; color:var(--chalk4); cursor:pointer; font-size:11px; padding:0 2px; flex-shrink:0; margin-top:2px; font-family:var(--font); }
@@ -503,10 +505,9 @@ function estimateNutrition(text){
 // べき等実装。バージョン番号を上げると次回起動時に再適用。
 // ════════════════════════════════════════════════════
 function migrateData(){
-  const DATA_VERSION = 7;  // v7: 睡眠時間抽出パターン大幅強化（消灯時間・まで眠った等）対応
+  const DATA_VERSION = 8;  // v8: 体温・体重カテゴリ追加
   if(L('kiroku_migration_ver',0) >= DATA_VERSION) return;
 
-  // 最新の KEYWORD_RULES と同じルール（定義順序の都合でここに独立定義）
   const MIG = [
     { cat:'sleep',
       re:/睡眠|起床|就寝|入眠|寝た|寝付|眠り|眠れ|眠剤|デエビゴ|マウスピース|中途覚醒|目覚め|不眠|ベッド|布団|眠りにつ|寝落ち|目を覚|起きた時|時に起き|消灯/ },
@@ -515,6 +516,8 @@ function migrateData(){
     { cat:'skin',    re:/肌荒れ|肌の調子|ニキビ|乾燥肌|脂っぽ|毛穴|保湿|スキンケア|洗顔|赤み|くすみ|化粧水|肌が/ },
     { cat:'body',    re:/運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|腹筋|散歩した|体重測定|体脂肪/ },
     { cat:'finance', re:/\d+円|支出|収入|交通費|食費|支払い|給料|節約|出費|レシート|コンビニで|スーパーで/ },
+    { cat:'temp',    re:/体温|発熱|微熱|高熱|熱が|熱を|平熱|\d{2}[\.\。]\d度|\d{2}度/ },
+    { cat:'weight',  re:/体重|体脂肪|BMI|\d{2,3}[\.\。]?\d?\s*kg|\d{2,3}[\.\。]?\d?\s*キロ/ },
   ];
 
   let all = L('kiroku_entries',[]); let changed = false;
@@ -575,14 +578,16 @@ let recog = null, isRec = false;
 let attachedPhotos = {};
 let liveResults = { entries:[], photos:[] };
 
-const CAT_LBL = { sleep:'睡眠', meal:'食事', skin:'肌', body:'運動', finance:'収支', other:'その他' };
-const CAT_CLS = { sleep:'cp-sleep', meal:'cp-meal', skin:'cp-skin', body:'cp-body', finance:'cp-finance', other:'cp-other' };
+const CAT_LBL = { sleep:'睡眠', meal:'食事', skin:'肌', body:'運動', finance:'収支', temp:'体温', weight:'体重', other:'その他' };
+const CAT_CLS = { sleep:'cp-sleep', meal:'cp-meal', skin:'cp-skin', body:'cp-body', finance:'cp-finance', temp:'cp-temp', weight:'cp-weight', other:'cp-other' };
 const CAT_DP  = {
   sleep:  'background:rgba(112,144,184,.25);color:#a0c0e8',
   meal:   'background:rgba(212,184,150,.2);color:#f0d0a8',
   skin:   'background:rgba(200,112,96,.2);color:#e8a098',
   body:   'background:rgba(112,168,128,.2);color:#90c8a0',
   finance:'background:rgba(184,160,96,.2);color:#e0c880',
+  temp:   'background:rgba(220,100,80,.2);color:#f0a090',
+  weight: 'background:rgba(140,180,140,.2);color:#a0d0a0',
   other:  'background:rgba(255,255,255,.07);color:#b0c4b4'
 };
 
@@ -662,7 +667,8 @@ let saveDate = todayKey; // can be overridden for past entries
 
 function renderRecord(c){
   liveResults = L('live_'+todayKey, { entries:[], photos:[] });
-  attachedPhotos = { meal:[], skin:[], receipt:[] };
+  attachedPhotos = {};
+  singlePhoto = null;
   saveDate = todayKey;
   c.innerHTML = `
     <!-- Sleep debt banner at top -->
@@ -685,45 +691,28 @@ function renderRecord(c){
       <button class="big-mic" id="big-mic" onclick="toggleVoice()">
         <div class="mic-orb">🎙</div>
         <span class="mic-main">タップして話す</span>
-        <span class="mic-sub">睡眠・食事・運動・肌・収支など、なんでもまとめて話せます</span>
+        <span class="mic-sub">睡眠・食事・体温・体重・運動・肌など、なんでもまとめて話せます</span>
       </button>
 
-      <!-- 写真スロット：各カテゴリ最大3枚、アルバム選択対応 -->
+      <!-- 写真スロット：1枚・何でもOK（音声で内容を補足） -->
       <div style="margin-bottom:14px">
-        <div style="margin-bottom:8px">
-          <div style="font-size:10px;color:var(--chalk3);margin-bottom:6px">🍱 食事の写真（最大3枚）</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap" id="photo-row-meal">
-            <label style="width:72px;height:72px;border:1.5px dashed var(--border2);border-radius:var(--r2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2);flex-shrink:0">
-              <input type="file" accept="image/*" multiple onchange="attachPhotos(this,'meal')" style="display:none">
-              <span style="font-size:20px">🍱</span>
-              <span style="font-size:8px;color:var(--chalk3);margin-top:2px">追加</span>
-            </label>
+        <div style="font-size:10px;color:var(--chalk3);margin-bottom:8px">📷 写真（任意・1枚）— 食事・体温計・体重計など何でも</div>
+        <div style="display:flex;align-items:center;gap:10px" id="photo-row-main">
+          <label id="photo-add-btn" style="width:72px;height:72px;border:1.5px dashed var(--border2);border-radius:var(--r2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2);flex-shrink:0">
+            <input type="file" accept="image/*" onchange="attachSinglePhoto(this)" style="display:none">
+            <span style="font-size:24px">📷</span>
+            <span style="font-size:8px;color:var(--chalk3);margin-top:2px">追加</span>
+          </label>
+          <div id="photo-preview-main" style="display:none;position:relative;width:72px;height:72px;flex-shrink:0">
+            <img id="photo-thumb-main" src="" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1.5px solid var(--border2)">
+            <button onclick="removeSinglePhoto()" style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.7);border:none;color:#fff;font-size:9px;cursor:pointer">✕</button>
           </div>
-        </div>
-        <div style="margin-bottom:8px">
-          <div style="font-size:10px;color:var(--chalk3);margin-bottom:6px">✨ 肌の写真（最大3枚）</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap" id="photo-row-skin">
-            <label style="width:72px;height:72px;border:1.5px dashed var(--border2);border-radius:var(--r2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2);flex-shrink:0">
-              <input type="file" accept="image/*" multiple onchange="attachPhotos(this,'skin')" style="display:none">
-              <span style="font-size:20px">✨</span>
-              <span style="font-size:8px;color:var(--chalk3);margin-top:2px">追加</span>
-            </label>
-          </div>
-        </div>
-        <div style="margin-bottom:8px">
-          <div style="font-size:10px;color:var(--chalk3);margin-bottom:6px">🧾 レシートの写真（最大3枚）</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap" id="photo-row-receipt">
-            <label style="width:72px;height:72px;border:1.5px dashed var(--border2);border-radius:var(--r2);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2);flex-shrink:0">
-              <input type="file" accept="image/*" multiple onchange="attachPhotos(this,'receipt')" style="display:none">
-              <span style="font-size:20px">🧾</span>
-              <span style="font-size:8px;color:var(--chalk3);margin-top:2px">追加</span>
-            </label>
-          </div>
+          <div style="font-size:10px;color:var(--chalk3);line-height:1.6">写真を撮ったら<br>音声でも補足してください</div>
         </div>
       </div>
 
       <div class="ta-wrap show" id="ta-wrap">
-        <textarea class="ta" id="ta" placeholder="ここに話した内容が入ります。直接テキストを入力・貼り付けもできます。&#10;例：睡眠記録、入眠3時、起床9時、眠剤あり。食事1食目パン、ヨーグルト。"></textarea>
+        <textarea class="ta" id="ta" placeholder="ここに話した内容が入ります。直接入力・貼り付けもできます。&#10;例：Am5時入眠Pm14時起床 眠剤あり。昼食ラーメン。体温36.4度。体重68.5kg。"></textarea>
         <div class="action-row">
           <button class="submit-btn" id="submit-btn" onclick="runAnalyze(event)">✦ AIで解析</button>
           <button class="clr-btn" onclick="clearInput()">クリア</button>
@@ -845,52 +834,34 @@ function clearInput(){
 // PHOTO ATTACH (multi, album)
 // ════════════════════════
 // attachedPhotos: { meal: [b64, b64, ...], skin: [...], receipt: [...] }
-function attachPhotos(input, type){
-  const files = Array.from(input.files);
-  if(!files.length) return;
-  if(!attachedPhotos[type]) attachedPhotos[type] = [];
-  files.forEach(file => {
-    if(attachedPhotos[type].length >= 3){ showToast('1カテゴリ最大3枚まで'); return; }
-    const reader = new FileReader();
-    reader.onload = ev => {
-      attachedPhotos[type].push(ev.target.result);
-      renderPhotoRow(type);
-      document.getElementById('ta-wrap')?.classList.add('show');
-    };
-    reader.readAsDataURL(file);
-  });
+// ── 写真1枚管理（統合スロット）
+let singlePhoto = null; // base64
+
+function attachSinglePhoto(input){
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    singlePhoto = ev.target.result;
+    document.getElementById('photo-preview-main').style.display = 'block';
+    document.getElementById('photo-thumb-main').src = singlePhoto;
+    document.getElementById('photo-add-btn').style.display = 'none';
+  };
+  reader.readAsDataURL(file);
 }
 
-function removePhotoAt(type, idx){
-  if(!attachedPhotos[type]) return;
-  attachedPhotos[type].splice(idx, 1);
-  renderPhotoRow(type);
+function removeSinglePhoto(){
+  singlePhoto = null;
+  document.getElementById('photo-preview-main').style.display = 'none';
+  document.getElementById('photo-thumb-main').src = '';
+  document.getElementById('photo-add-btn').style.display = 'flex';
 }
 
-function renderPhotoRow(type){
-  const icons = {meal:'🍱',skin:'✨',receipt:'🧾'};
-  const row = document.getElementById('photo-row-'+type);
-  if(!row) return;
-  const photos = attachedPhotos[type] || [];
-  // Keep the add button, replace thumbnails
-  const addBtn = row.querySelector('label');
-  row.innerHTML = '';
-  photos.forEach((b64, i) => {
-    const div = document.createElement('div');
-    div.style.cssText = 'position:relative;width:72px;height:72px;flex-shrink:0';
-    div.innerHTML = `<img src="${b64}" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1.5px solid var(--border2)">
-      <button onclick="removePhotoAt('${type}',${i})" style="position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.7);border:none;color:#fff;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>`;
-    row.appendChild(div);
-  });
-  if(photos.length < 3) row.appendChild(addBtn);
-}
-
-// Legacy single-photo remove (keep for compatibility)
-function removePhoto(e, key){
-  e.stopPropagation();
-  attachedPhotos[key] = [];
-  renderPhotoRow(key);
-}
+// 旧API互換（呼ばれても何もしない）
+function attachPhotos(input, type){}
+function removePhotoAt(type, idx){}
+function renderPhotoRow(type){}
+function removePhoto(e, key){}
 
 // ════════════════════════
 // SUBMIT
@@ -930,6 +901,10 @@ const KEYWORD_RULES = [
     re: /運動|筋トレ|ジョギング|ウォーキング|ランニング|ジム|ストレッチ|スクワット|腹筋|散歩した|体重測定|体脂肪/ },
   { cat:'finance',
     re: /\d+円|支出|収入|交通費|食費|支払い|給料|節約|出費|レシート|コンビニで|スーパーで/ },
+  { cat:'temp',
+    re: /体温|発熱|微熱|高熱|熱が|熱を|平熱|\d{2}[\.\。]\d度|\d{2}度/ },
+  { cat:'weight',
+    re: /体重|体脂肪|BMI|\d{2,3}[\.\。]?\d?\s*kg|\d{2,3}[\.\。]?\d?\s*キロ/ },
 ];
 
 // 複数カテゴリをすべて返す（配列）
@@ -1277,6 +1252,64 @@ function generateAIResponse(text, historyData){
     parts.push(msg);
   }
 
+  // ── 体温分析
+  if(KEYWORD_RULES.find(r=>r.cat==='temp')?.re.test(text)){
+    try{
+      const tM = text.match(/(\d{2}[\.\。]?\d?)\s*(?:度|℃)/);
+      const temp = tM ? parseFloat(tM[1].replace('。','.')) : null;
+      const prevTemps = recent.flatMap(d=>d.entries||[])
+        .filter(e=>e.category==='temp'&&e.details?.temp_c)
+        .slice(0,7).map(e=>e.details.temp_c);
+      const avgTemp = prevTemps.length ? Math.round(prevTemps.reduce((s,v)=>s+v,0)/prevTemps.length*10)/10 : null;
+      let msg = '【体温の記録】\n';
+      if(temp){
+        msg += `体温${temp}℃を記録。`;
+        if(temp >= 38.0)      msg += `38℃以上の高熱です。安静と水分補給を優先し、必要に応じて医療機関を受診してください。`;
+        else if(temp >= 37.5) msg += `微熱があります。無理をせず様子を見ましょう。睡眠・食事の記録と合わせて体調管理を。`;
+        else if(temp >= 37.0) msg += `平熱よりやや高めです。疲労や睡眠不足が影響している可能性があります。`;
+        else                   msg += `平熱範囲内です。`;
+        if(avgTemp) msg += `\n直近平均は${avgTemp}℃でした。`;
+      } else {
+        msg += `体温を記録しました。数値（例：36.4度）も記録すると推移が追えます。`;
+      }
+      parts.push(msg);
+    } catch(err){ console.error('[AI temp]',err); }
+  }
+
+  // ── 体重分析
+  if(KEYWORD_RULES.find(r=>r.cat==='weight')?.re.test(text)){
+    try{
+      const wM = text.match(/(\d{2,3}[\.\。]?\d?)\s*(?:kg|キロ)/i);
+      const fM = text.match(/体脂肪\s*[率は]?\s*(\d{1,2}[\.\。]?\d?)\s*%?/);
+      const weight = wM ? parseFloat(wM[1].replace('。','.')) : null;
+      const fat    = fM ? parseFloat(fM[1].replace('。','.')) : null;
+      const prevWeights = recent.flatMap(d=>d.entries||[])
+        .filter(e=>e.category==='weight'&&e.details?.weight_kg)
+        .slice(0,7).map(e=>e.details.weight_kg);
+      const prevWeight = prevWeights[0] ?? null;
+      const avgWeight  = prevWeights.length
+        ? Math.round(prevWeights.reduce((s,v)=>s+v,0)/prevWeights.length*10)/10 : null;
+      let msg = '【体重の記録】\n';
+      if(weight){
+        msg += `体重${weight}kgを記録。`;
+        if(fat) msg += `体脂肪率${fat}%。`;
+        if(prevWeight){
+          const diff = Math.round((weight - prevWeight)*10)/10;
+          msg += `\n前回（${prevWeight}kg）比${diff>=0?'+':''}${diff}kg。`;
+          if(Math.abs(diff) >= 1) msg += `1kg以上の変動があります。食事・水分・排泄のタイミングで変わるため、同じ条件（起床直後など）で測ると推移が正確です。`;
+        }
+        if(avgWeight) msg += `\n直近平均${avgWeight}kgと比べて${Math.round((weight-avgWeight)*10)/10>=0?'+':''}${Math.round((weight-avgWeight)*10)/10}kg。`;
+        // 睡眠との相関ヒント
+        const prevSleep = recent.flatMap(d=>d.entries||[])
+          .find(e=>e.category==='sleep'&&e.details?.duration_h)?.details?.duration_h ?? null;
+        if(prevSleep && prevSleep < 6) msg += `\n睡眠不足（直近${prevSleep}h）は食欲増進ホルモンを増やし体重管理を難しくします。`;
+      } else {
+        msg += `体重を記録しました。数値（例：68.5kg）も記録すると推移グラフが作れます。`;
+      }
+      parts.push(msg);
+    } catch(err){ console.error('[AI weight]',err); }
+  }
+
   if(parts.length === 0){
     parts.push('【AI分析】記録しました。データが蓄積されるほど、より詳細な分析ができるようになります。継続が力です！');
   }
@@ -1369,6 +1402,25 @@ function parseTextLocal(text){
           if(amtM){ details.amount = +amtM[1].replace(/,/g,''); details.transaction_type = isInc?'income':'expense'; }
           summary = details.amount ? `${isInc?'収入':'支出'} ¥${details.amount.toLocaleString()}` : '収支';
         }
+        else if(cat === 'temp'){
+          // 体温値を抽出（例: 36.4度、36度、36.4℃）
+          const tM = text.match(/(\d{2}[\.\。]?\d?)\s*(?:度|℃)/);
+          if(tM){ details.temp_c = parseFloat(tM[1].replace('。','.')); }
+          const isHighFever = details.temp_c >= 38.0;
+          const isFever     = details.temp_c >= 37.5;
+          summary = details.temp_c ? `${details.temp_c}℃${isHighFever?'（高熱）':isFever?'（発熱）':''}` : '体温';
+        }
+        else if(cat === 'weight'){
+          // 体重・体脂肪を抽出（例: 68.5kg、68キロ、体脂肪18%）
+          const wM = text.match(/(\d{2,3}[\.\。]?\d?)\s*(?:kg|キロ)/i);
+          const fM = text.match(/体脂肪\s*[率は]?\s*(\d{1,2}[\.\。]?\d?)\s*%?/);
+          if(wM){ details.weight_kg = parseFloat(wM[1].replace('。','.')); }
+          if(fM){ details.body_fat  = parseFloat(fM[1].replace('。','.')); }
+          const parts2 = [];
+          if(details.weight_kg) parts2.push(`${details.weight_kg}kg`);
+          if(details.body_fat)  parts2.push(`体脂肪${details.body_fat}%`);
+          summary = parts2.length ? parts2.join(' ') : '体重';
+        }
         else if(cat === 'skin'){
           const st = ['乾燥肌','ニキビ','赤み','脂っぽ','くすみ'].filter(k=>text.includes(k));
           summary = st.length ? st.join('・') : '肌';
@@ -1406,7 +1458,7 @@ async function runAnalyze(e){
   if(_isAnalyzing){ return; }
 
   const text = (document.getElementById('ta')?.value || '').trim();
-  const hasPhotos = Object.values(attachedPhotos).some(a=>Array.isArray(a)?a.length>0:!!a);
+  const hasPhotos = !!singlePhoto;
   if(!text && !hasPhotos){ showToast('テキストか写真が必要です'); return; }
 
   _isAnalyzing = true;
@@ -1486,20 +1538,16 @@ async function runAnalyze(e){
       }catch(err){ console.log('AI unavailable, using local parse'); }
     }
 
-    // 写真解析
-    for(const type of ['meal','skin','receipt']){
-      const photos = Array.isArray(attachedPhotos[type]) ? attachedPhotos[type] : [];
-      for(const b64 of photos){
-        const result = await analyzeImageWithAI(type, b64);
-        if(!result) continue;
-        if(type==='receipt'){
-          try{
-            const pj=JSON.parse(result);
-            pendingEntries.push({category:'finance',categories:['finance'],summary:`支出 ¥${(pj.total||0).toLocaleString()} ${pj.store||''}`,details:{transaction_type:'expense',amount:pj.total,label:`${pj.store||''}(${pj.category||''})`,raw:'レシート'},ts:Date.now()});
-          }catch{ pendingEntries.push({category:'other',categories:['other'],summary:result.slice(0,80),details:{raw:result},ts:Date.now()}); }
-        } else {
-          pendingEntries.push({category:type,categories:[type],summary:`${type==='skin'?'肌':'食事'}写真を解析しました`,details:{ai_result:result,photo_b64:b64,raw:''},ts:Date.now()});
-        }
+    // 写真解析（1枚・内容をAIが自動判定）
+    if(singlePhoto){
+      const result = await analyzeImageWithAI('auto', singlePhoto);
+      if(result){
+        pendingEntries.push({
+          category:'other', categories:['other'],
+          summary:'写真を解析しました',
+          details:{ ai_result:result, photo_b64:singlePhoto, raw: result },
+          ts:Date.now()
+        });
       }
     }
 
@@ -1604,7 +1652,9 @@ function commitSave(){
     S('live_'+todayKey, {entries:[], photos:[]});
     liveResults = {entries:[], photos:[]};
 
-    attachedPhotos = {meal:[], skin:[], receipt:[]};
+    attachedPhotos = {};
+    singlePhoto = null;
+    removeSinglePhoto();
     ['meal','skin','receipt'].forEach(t=>renderPhotoRow(t));
     const fb = document.getElementById('ai-feedback');
     if(fb){ fb.style.display='none'; fb.innerHTML=''; }
@@ -1646,13 +1696,14 @@ function discardFeedback(){
 async function analyzeImageWithAI(type, b64){
   const [mtype,imgData]=b64.split(';base64,');
   const mediaType=mtype.replace('data:','');
+  // 'auto'の場合は写真の内容を自動判定して分析
   const prompts={
+    auto:'この写真に何が写っているか判定し、生活記録として有用な情報を日本語150字以内で分析してください。食事なら栄養バランス、体温計や体重計なら数値、肌なら状態、運動なら種類を中心に。',
     meal:'この食事の写真から栄養バランス（カロリー目安・タンパク質・炭水化物・脂質・野菜量）を推定し、日本語150字以内でアドバイスを。',
     skin:'この肌の写真を見て、肌状態（乾燥・脂っぽさ・血色・赤み・くすみ・ニキビ）を日本語150字以内で端的に分析してください。',
-    receipt:'このレシートから{"store":"店名","total":数値,"category":"食費/日用品/交通費/娯楽/その他"}のJSONのみ返してください（前置き不要）。'
   };
   try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:mediaType,data:imgData}},{type:'text',text:prompts[type]}]}]})});
+    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:mediaType,data:imgData}},{type:'text',text:prompts[type]||prompts.auto}]}]})});
     const d=await res.json();
     return d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim()||null;
   }catch(e){ return null; }
@@ -1788,6 +1839,10 @@ function renderHistory(c){
     if(day.entries?.some(e=>e.category==='skin')) pills.push({t:'✨', c:'skin'});
     if(day.entries?.some(e=>e.category==='body')) pills.push({t:'🏃', c:'body'});
     if(day.entries?.some(e=>e.category==='finance')) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
+    const tempE = day.entries?.find(e=>e.category==='temp'&&e.details?.temp_c);
+    if(tempE) pills.push({t:`🌡 ${tempE.details.temp_c}℃`, c:'temp'});
+    const weightE = day.entries?.find(e=>e.category==='weight'&&e.details?.weight_kg);
+    if(weightE) pills.push({t:`⚖ ${weightE.details.weight_kg}kg`, c:'weight'});
     if(moodEmoji) pills.push({t:moodEmoji, c:'other'});
 
     return `<div class="day-card" id="dc${di}">
