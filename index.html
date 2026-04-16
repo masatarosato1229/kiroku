@@ -452,20 +452,57 @@ migrateOldData();
 // 栄養素推定テーブル＋関数（migrateDataより前に必須 - constはホイストされないため）
 // ════════════════════════════════════════════════════
 const NUTRITION_DB = {
+  // 肉類
   ハラミ:    {p:22,f:18,c:0},  カルビ:    {p:18,f:22,c:0},
   鶏むね:    {p:24,f:2,c:0},   鶏もも:    {p:20,f:8,c:0},
   豚カツ:    {p:22,f:20,c:15}, 唐揚げ:    {p:20,f:15,c:12},
   焼肉:      {p:20,f:16,c:0},  牛肉:      {p:20,f:14,c:0},
   豚肉:      {p:18,f:14,c:0},  鶏肉:      {p:22,f:5,c:0},
+  ステーキ:  {p:25,f:20,c:0},  ハンバーグ:{p:18,f:18,c:10},
+  ソーセージ:{p:12,f:20,c:3},  ベーコン:  {p:13,f:20,c:1},
+  焼き鳥:   {p:18,f:8,c:2},   とんかつ:  {p:22,f:22,c:15},
+  // 魚介類
   魚:        {p:20,f:5,c:0},   刺身:      {p:20,f:3,c:0},
+  サーモン:  {p:20,f:10,c:0},  マグロ:    {p:26,f:1,c:0},
+  エビ:      {p:17,f:1,c:0},   タコ:      {p:16,f:1,c:1},
+  イカ:      {p:17,f:1,c:1},   貝:        {p:12,f:2,c:2},
+  焼き魚:   {p:22,f:8,c:0},   煮魚:      {p:20,f:6,c:2},
+  アジ:      {p:19,f:4,c:0},   サバ:      {p:21,f:12,c:0},
+  // 卵・豆類
   卵:        {p:6,f:5,c:0},    卵料理:    {p:12,f:10,c:2},
+  目玉焼き:  {p:6,f:6,c:0},    スクランブルエッグ:{p:8,f:8,c:1},
   豆腐:      {p:5,f:3,c:1},    冷奴:      {p:5,f:3,c:1},
-  納豆:      {p:7,f:4,c:4},    プロテイン:{p:25,f:2,c:5},
+  納豆:      {p:7,f:4,c:4},    豆乳:      {p:4,f:2,c:3},
+  枝豆:      {p:11,f:6,c:8},   大豆:      {p:14,f:9,c:11},
+  プロテイン:{p:25,f:2,c:5},
+  // 主食類
   ご飯:      {p:3,f:0,c:55},   米:        {p:3,f:0,c:55},
-  パン:      {p:4,f:4,c:30},   うどん:    {p:3,f:1,c:55},
+  パン:      {p:4,f:4,c:30},   食パン:    {p:5,f:3,c:28},
+  うどん:    {p:3,f:1,c:55},   そば:      {p:5,f:1,c:50},
   ラーメン:  {p:8,f:10,c:55},  パスタ:    {p:7,f:2,c:50},
+  そうめん:  {p:4,f:1,c:55},   チャーハン:{p:8,f:8,c:60},
+  オートミール:{p:5,f:3,c:27}, おにぎり:  {p:3,f:1,c:40},
+  // 丼・定食
+  牛丼:      {p:18,f:12,c:60}, 親子丼:    {p:20,f:10,c:55},
+  天丼:      {p:15,f:15,c:65}, カツ丼:    {p:22,f:18,c:60},
+  定食:      {p:20,f:12,c:55}, 弁当:      {p:18,f:14,c:55},
+  // 野菜・サラダ
   サラダ:    {p:2,f:3,c:5},    野菜炒め:  {p:3,f:5,c:8},
-  味噌汁:    {p:3,f:1,c:3},    ヨーグルト:{p:4,f:3,c:8},
+  ブロッコリー:{p:3,f:0,c:3},  ほうれん草:{p:2,f:0,c:1},
+  トマト:    {p:1,f:0,c:4},    きゅうり:  {p:1,f:0,c:2},
+  にんじん:  {p:1,f:0,c:6},    キャベツ:  {p:1,f:0,c:4},
+  // スープ・汁物
+  味噌汁:    {p:3,f:1,c:3},    豚汁:      {p:8,f:5,c:8},
+  ポタージュ:{p:3,f:5,c:12},   スープ:    {p:3,f:3,c:5},
+  シチュー:  {p:12,f:8,c:12},  カレー:    {p:12,f:10,c:40},
+  鍋:        {p:20,f:8,c:10},
+  // 乳製品・果物
+  ヨーグルト:{p:4,f:3,c:8},    牛乳:      {p:3,f:4,c:5},
+  チーズ:    {p:8,f:12,c:1},   バナナ:    {p:1,f:0,c:23},
+  りんご:    {p:0,f:0,c:15},   みかん:    {p:1,f:0,c:12},
+  // ナッツ・その他
+  ナッツ:    {p:7,f:15,c:6},   アーモンド:{p:7,f:15,c:6},
+  まかない:  {p:18,f:10,c:45},
 };
 function estimateNutrition(text){
   if(!text) return {p:0,f:0,c:0,matched:[]};
@@ -723,6 +760,7 @@ function renderRecord(c){
     </div>
 
     <div id="live-panel">${buildLive()}</div>
+    <div id="today-saved-panel"></div>
 
     <!-- Mood picker -->
     <div style="background:var(--card);border:1px solid var(--border2);border-radius:var(--r);padding:14px 16px;margin-bottom:12px">
@@ -742,6 +780,7 @@ function renderRecord(c){
   // Restore mood selection if already set today
   const todayMood = getAll().find(e=>e.date===todayKey)?.mood;
   if(todayMood) highlightMood(todayMood);
+  buildTodaySaved();
 }
 
 function updateSaveDate(val){
@@ -791,6 +830,41 @@ function buildLive(){
 function refreshLive(){
   const p = document.getElementById('live-panel');
   if(p) p.innerHTML = buildLive();
+}
+
+// ════════════════════════
+// TODAY SAVED PANEL — 保存済み記録を記録タブに表示
+// ════════════════════════
+function buildTodaySaved(){
+  const panel = document.getElementById('today-saved-panel');
+  if(!panel) return;
+  const targetDate = (typeof saveDate !== 'undefined' ? saveDate : null) || todayKey;
+  const all = getAll();
+  const day = all.find(d => d.date === targetDate);
+  if(!day || !day.entries?.length){ panel.innerHTML = ''; return; }
+
+  const entries = day.entries;
+  const html = entries.map((e) => {
+    const cats = e.categories || [e.category || 'other'];
+    const tagHtml = cats.map(c=>`<span class="cat-pill ${CAT_CLS[c]||'cp-other'}">${CAT_LBL[c]||c}</span>`).join('');
+    const displayText = (e.details?.raw || e.summary || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const previewStyle = 'font-size:12px;color:var(--chalk2);margin-top:5px;line-height:1.7;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;word-break:break-all';
+    return `<div class="result-entry" style="flex-direction:column;align-items:flex-start;gap:5px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%">
+        <div style="display:flex;gap:3px;flex-wrap:wrap;flex:1">${tagHtml}</div>
+      </div>
+      <div style="${previewStyle}">${displayText}</div>
+      ${e.details?.duration_h ? `<div style="font-size:10px;color:#a0c0e8;margin-top:3px">💤 ${e.details.duration_h}h${e.details.bed_time?' ('+e.details.bed_time+'〜'+(e.details.wake_time||'?')+')':''}</div>` : ''}
+      ${e.details?.protein_g ? `<div style="font-size:10px;color:#f0d0a8;margin-top:3px">P:${e.details.protein_g}g${e.details.fat_g?' F:'+e.details.fat_g+'g':''}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `<div class="live-panel" style="margin-bottom:16px">
+    <div class="live-head">
+      <span class="live-head-title">✓ ${targetDate===todayKey?'今日':'この日'}の保存済み記録 — ${entries.length}件</span>
+    </div>
+    <div class="live-body">${html}</div>
+  </div>`;
 }
 
 // ════════════════════════
@@ -1177,16 +1251,21 @@ function generateAIResponse(text, historyData){
         if(nutr.p > 0 || nutr.f > 0 || nutr.c > 0){
           msg += `\n推定栄養素 → タンパク質:${nutr.p}g / 脂質:${nutr.f}g / 糖質:${nutr.c}g`;
         }
+        if(nutr.p >= 30)      msg += `\nタンパク質${nutr.p}gは筋肉合成に最適な量です！運動後30分以内の摂取で吸収効率が最大化されます。`;
+        else if(nutr.p >= 20) msg += `\nタンパク質${nutr.p}g：良好です。あと${30-nutr.p}g追加できれば理想的（卵1個≒6g、豆腐半丁≒5g）。`;
+        else if(nutr.p >= 10) msg += `\nタンパク質${nutr.p}gはやや少なめです。鶏むね・卵・豆腐などを1品追加するとボディメイクに直結します。`;
+        else if(nutr.p > 0)   msg += `\nタンパク質${nutr.p}gは少なめです。意識的にタンパク源（肉・魚・卵・豆腐）を加えましょう。`;
         if(avgProtein > 0){
           const diffP = Math.round(nutr.p - avgProtein);
           msg += `\n直近のタンパク質平均${Math.round(avgProtein)}gと比べると今回は${diffP>=0?'+':''}${diffP}g。`;
         }
-        if(nutr.p >= 25)      msg += `\nタンパク質${nutr.p}gは筋肉合成に十分な量です。`;
-        else if(nutr.p >= 15) msg += `\nあと${25-nutr.p}g追加できれば理想的です（卵1個≒6g、豆腐100g≒5g）。`;
-        else if(nutr.p > 0)   msg += `\nタンパク質がやや少なめです。鶏むね肉・卵・豆腐などを1品追加するとボディメイクに直結します。`;
-        if(nutr.f > 25) msg += `\n脂質が高めです。次の食事では和食（味噌汁・納豆・卵）中心にすると消化にも優しくバランスが整います。`;
+        if(nutr.f > 30) msg += `\n脂質が高め（${nutr.f}g）。次の食事は和食（味噌汁・納豆・卵）中心にすると消化にも優しくバランスが整います。`;
+        if(nutr.c > 80) msg += `\n糖質${nutr.c}gは高め。野菜→タンパク質→炭水化物の順で食べると血糖値の急上昇を抑えられます。`;
       } else {
-        msg += `食事を記録しました。${mealDays>=5?`直近${mealDays}日間継続して食事記録できています！`:''}「タンパク質:30g」のように栄養素も記録すると詳細な分析ができます。`;
+        const timeOfDay = /朝食|朝ごはん/.test(text)?'朝食':/昼食|ランチ|昼ごはん/.test(text)?'昼食':/夕食|ディナー|夕ごはん/.test(text)?'夕食':null;
+        msg += `食事を記録しました。${timeOfDay?timeOfDay+'の記録です。\n':''}`;
+        msg += `食材名（鶏むね肉・卵・豆腐・刺身など）を具体的に書くと栄養素を自動推定できます。\n理想の1食はタンパク質25〜30gが目安です（鶏むね肉100g≒24g、卵1個≒6g、豆腐半丁≒5g）。`;
+        if(mealDays>=5) msg += `\n✓ 直近${mealDays}日間継続して食事記録できています！`;
       }
       parts.push(msg);
     } catch(err){ console.error('[AI meal]', err); parts.push('【栄養士の分析】食事を記録しました。'); }
@@ -1660,6 +1739,7 @@ function commitSave(){
     if(fb){ fb.style.display='none'; fb.innerHTML=''; }
     const ta = document.getElementById('ta'); if(ta) ta.value='';
     refreshLive();
+    buildTodaySaved();
     showToast(`${targetDate} に保存しました ✓`);
   } catch(err){
     console.error('[commitSave fatal]', err);
@@ -1760,6 +1840,7 @@ function saveToday(){
     all.sort((a,b)=>b.date.localeCompare(a.date));
     S('kiroku_entries',all);
     refreshLive();
+    buildTodaySaved();
     saveDate=todayKey;
     const inp=document.getElementById('save-date-input'); if(inp) inp.value=todayKey.replace(/\./g,'-');
     const badge=document.getElementById('save-date-badge'); if(badge) badge.textContent='今日';
