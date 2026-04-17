@@ -1663,16 +1663,15 @@ function showFeedbackPreview(entries, aiComment, usedRealAI){
 let _isSaving = false;  // 二重保存防止フラグ
 
 function commitSave(){
-  if(_isSaving){ return; }
+  if(_isSaving) return;
   if(!pendingEntries.length){ showToast('保存する内容がありません'); return; }
   _isSaving = true;
 
   try{
     const targetDate = saveDate || todayKey;
     const toSave = pendingEntries.slice();
-    pendingEntries  = [];
-    pendingAiComment= '';
 
+    // ── データ保存（DOM操作なし・ここだけに集中）
     const all = getAll();
     const idx = all.findIndex(d=>d.date===targetDate);
     if(idx>=0){
@@ -1686,52 +1685,31 @@ function commitSave(){
     }
     all.sort((a,b)=>b.date.localeCompare(a.date));
 
-    // localStorage保存（失敗時はサイズ超過の可能性があるため写真を除いて再試行）
     try{
       S('kiroku_entries', all);
     } catch(storageErr){
-      console.error('[commitSave storage]', storageErr);
-      // 写真データを除いて保存を再試行
       const allNoPhoto = JSON.parse(JSON.stringify(all));
       allNoPhoto.forEach(d=>(d.entries||[]).forEach(e=>{ if(e.details?.photo_b64) delete e.details.photo_b64; }));
-      try{ S('kiroku_entries', allNoPhoto); showToast('写真を除いて保存しました（容量不足）'); }
-      catch(e2){ showToast('保存に失敗しました。バックアップをお試しください。'); return; }
+      S('kiroku_entries', allNoPhoto);
     }
 
-    S('live_'+todayKey, {entries:[], photos:[]});
-    liveResults = {entries:[], photos:[]};
+    // ── グローバル状態リセット（DOM不要）
+    pendingEntries   = [];
+    pendingAiComment = '';
+    singlePhoto      = null;
+    attachedPhotos   = {};
+    liveResults      = {entries:[], photos:[]};
+    S('live_'+todayKey, liveResults);
 
-    attachedPhotos = {};
-    singlePhoto = null;
-    removeSinglePhoto();
-    ['meal','skin','receipt'].forEach(t=>renderPhotoRow(t));
-    const fb = document.getElementById('ai-feedback');
-    if(fb){ fb.style.display='none'; fb.innerHTML=''; }
-    const ta = document.getElementById('ta'); if(ta) ta.value='';
-    refreshLive();
-    buildTodaySaved();
+    // ── 成功 → 履歴へ（goNav が DOM を丸ごと再描画するので個別クリア不要）
     showToast(`${targetDate} に保存しました ✓`);
-    setTimeout(() => goNav('history'), 600);
+    setTimeout(()=>{ goNav('history'); }, 500);
+
   } catch(err){
-    console.error('[commitSave fatal]', err);
-    // 最低限、生テキストだけは保存する
-    try{
-      const rawText = document.getElementById('ta')?.value || '';
-      if(rawText){
-        const all = getAll();
-        const targetDate = saveDate || todayKey;
-        const idx = all.findIndex(d=>d.date===targetDate);
-        const fallbackEntry = {category:'other',categories:['other'],summary:'記録',details:{raw:rawText},ts:Date.now()};
-        if(idx>=0){ all[idx].entries=[...(all[idx].entries||[]),fallbackEntry]; }
-        else { all.push({date:targetDate,ts:Date.now(),entries:[fallbackEntry]}); }
-        S('kiroku_entries', all);
-        showToast('エラーが発生しましたが生テキストを保存しました');
-      } else {
-        showToast('保存に失敗しました');
-      }
-    } catch(e2){ console.error('[commitSave fallback]', e2); showToast('保存に失敗しました'); }
+    showToast('保存に失敗しました: ' + (err.message||err));
+    console.error('[commitSave]', err);
   } finally {
-    setTimeout(()=>{ _isSaving = false; }, 300);
+    _isSaving = false;
   }
 }
 
@@ -1787,15 +1765,13 @@ function highlightMood(v){
 // SAVE（「今日の記録を保存する」ボタン用 — liveResultsを保存）
 // ════════════════════════
 function saveToday(){
-  if(_isSaving){ return; }
+  if(_isSaving) return;
   const toSave = liveResults.entries.slice();
   if(!toSave.length){ showToast('記録がありません'); return; }
-
   _isSaving = true;
+
   try{
     const targetDate = saveDate || todayKey;
-    liveResults = {entries:[], photos:[]};  // 先にクリアして二重保存防止
-    S('live_'+todayKey, liveResults);
 
     const all = getAll();
     const idx = all.findIndex(d=>d.date===targetDate);
@@ -1810,16 +1786,21 @@ function saveToday(){
     }
     all.sort((a,b)=>b.date.localeCompare(a.date));
     S('kiroku_entries',all);
-    refreshLive();
-    buildTodaySaved();
-    saveDate=todayKey;
-    const inp=document.getElementById('save-date-input'); if(inp) inp.value=todayKey.replace(/\./g,'-');
-    const badge=document.getElementById('save-date-badge'); if(badge) badge.textContent='今日';
-    const sb=document.getElementById('save-btn'); if(sb) sb.textContent='今日の記録を保存する';
+
+    // グローバル状態リセット
+    liveResults  = {entries:[],photos:[]};
+    singlePhoto  = null;
+    attachedPhotos = {};
+    S('live_'+todayKey, liveResults);
+
     showToast(`${targetDate} の記録を保存しました ✓`);
-    setTimeout(() => goNav('history'), 600);
+    setTimeout(()=>{ goNav('history'); }, 500);
+
+  } catch(err){
+    showToast('保存に失敗しました: ' + (err.message||err));
+    console.error('[saveToday]', err);
   } finally {
-    setTimeout(()=>{ _isSaving = false; }, 300);
+    _isSaving = false;
   }
 }
 
