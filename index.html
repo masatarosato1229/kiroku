@@ -557,7 +557,7 @@ function estimateNutrition(text){
 // べき等実装。バージョン番号を上げると次回起動時に再適用。
 // ════════════════════════════════════════════════════
 function migrateData(){
-  const DATA_VERSION = 9;  // v9: 飯・まかない等 食事キーワード大幅追加
+  const DATA_VERSION = 10; // v10: hasCat全面対応・全エントリ再カテゴリ化  // v9: 飯・まかない等 食事キーワード大幅追加
   if(L('kiroku_migration_ver',0) >= DATA_VERSION) return;
 
   const MIG = [
@@ -642,6 +642,16 @@ const CAT_DP  = {
   weight: 'background:rgba(140,180,140,.2);color:#a0d0a0',
   other:  'background:rgba(255,255,255,.07);color:#b0c4b4'
 };
+
+// ────────────────────────────────────────────────────
+// カテゴリ判定ヘルパー（category単体 or categories配列の両方に対応）
+// ────────────────────────────────────────────────────
+function hasCat(e, cat){
+  if(!e) return false;
+  if(e.category === cat) return true;
+  if(Array.isArray(e.categories) && e.categories.includes(cat)) return true;
+  return false;
+}
 
 // ════════════════════════
 // NAV
@@ -1175,7 +1185,7 @@ function generateAIResponse(text, historyData){
     // 過去データを取得
     const sleepHistory = recent
       .flatMap(d=>d.entries||[])
-      .filter(e=>e.category==='sleep' && e.details?.duration_h)
+      .filter(e=>hasCat(e,'sleep') && e.details?.duration_h)
       .slice(0, 7);
     const prevH   = sleepHistory[0]?.details?.duration_h ?? null;
     const avgH    = sleepHistory.length
@@ -1245,10 +1255,10 @@ function generateAIResponse(text, historyData){
   if(KEYWORD_RULES.find(r=>r.cat==='meal')?.re.test(text)){
     try{
       const nutr       = estimateNutrition(text);
-      const mealHistory= recent.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+      const mealHistory= recent.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'meal'));
       const avgProtein = mealHistory.filter(e=>e.details?.protein_g)
         .reduce((s,e,_,a)=>s+e.details.protein_g/a.length, 0);
-      const mealDays   = recent.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
+      const mealDays   = recent.filter(d=>d.entries?.some(e=>hasCat(e,'meal'))).length;
       // 直書き値があるかどうかの判定（「:39.5g」「: 約39.5g」など）
       const hasDirectValue = /[:：]\s*約?\s*\d+(?:\.\d+)?\s*g/i.test(text) || /[PpＰｐ]\s*[:：]\s*\d/.test(text);
 
@@ -1297,9 +1307,9 @@ function generateAIResponse(text, historyData){
     const durM    = text.match(/(\d+)\s*分/);
     const dur     = durM ? +durM[1] : null;
     const typeM   = text.match(/筋トレ|ジョギング|ウォーキング|散歩|ランニング|ジム|ストレッチ|スクワット/);
-    const exDays  = recent.slice(0,7).filter(d=>d.entries?.some(e=>e.category==='body')).length;
+    const exDays  = recent.slice(0,7).filter(d=>d.entries?.some(e=>hasCat(e,'body'))).length;
     const exMins  = recent.slice(0,7).flatMap(d=>d.entries||[])
-      .filter(e=>e.category==='body'&&e.details?.duration_min)
+      .filter(e=>hasCat(e,'body')&&e.details?.duration_min)
       .reduce((s,e)=>s+e.details.duration_min,0);
 
     let msg = '【トレーニングの分析】\n';
@@ -1580,63 +1590,10 @@ async function runAnalyze(e){
       }
     }
 
-    // ── テキスト解析（複数カテゴリ）
+    // ── テキスト解析（ローカル解析のみ・安定動作優先）
     pendingEntries = [];
     if(text) pendingEntries = parseTextLocal(text);
-
-    // ── 実AI呼び出し（失敗したらローカル解析で続行）
-    // ローカル解析結果を保持しておく（睡眠時間などはローカル計算が正確なため）
-    const localEntries = pendingEntries.slice();
-    let usedRealAI = false;
-    if(text && pendingEntries.length){
-      try{
-        const prompt = `以下は生活記録テキストです。\nテキスト:「${text}」\n含まれるすべての記録を抽出し以下のJSON形式のみで（前置き不要）:\n{"entries":[{"category":"sleep/meal/skin/body/finance/other","categories":["sleep","meal"等複数可],"summary":"50字以内","details":{"duration_h":数値,"quality":1-5,"medication":bool,"mouthpiece":bool,"bed_time":"HH:MM","wake_time":"HH:MM","meal_type":"朝/昼/夕/間食","calories_est":数値,"protein_g":数値,"exercise_type":"","duration_min":数値,"transaction_type":"expense/income","amount":数値,"label":"","raw":"テキスト原文"}}]}\n必ず睡眠と食事が両方含まれる場合は両方のentryを出すこと。複数カテゴリの記録は別entryで分けること。`;
-        const res = await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:2000, messages:[{role:'user',content:prompt}] }) });
-        const d = await res.json();
-        const raw = d.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
-        const parsed = JSON.parse(raw);
-        if(parsed.entries?.length){
-          const aiEntries = parsed.entries.map(en=>{
-            if(!en.categories||!en.categories.length) en.categories=[en.category||'other'];
-            en.ts=Date.now(); en.details=en.details||{}; if(!en.details.raw) en.details.raw=text;
-
-            // 睡眠エントリの duration_h は必ずローカル計算値で補完（APIは不正確なことが多い）
-            if(en.category==='sleep'||(en.categories||[]).includes('sleep')){
-              const localSleep = localEntries.find(e=>e.category==='sleep');
-              if(localSleep?.details?.duration_h){
-                en.details.duration_h = localSleep.details.duration_h;
-                en.details.bed_time   = en.details.bed_time  || localSleep.details.bed_time;
-                en.details.wake_time  = en.details.wake_time || localSleep.details.wake_time;
-              }
-              // ローカル計算で直接取得も試みる
-              if(!en.details.duration_h){
-                try{
-                  const calc = calculateSleepDuration(text);
-                  if(calc){ en.details.duration_h=calc.duration_h; en.details.bed_time=calc.bed_time; en.details.wake_time=calc.wake_time; }
-                }catch(err){}
-              }
-              en.details.medication = en.details.medication ?? /眠剤|デエビゴ/.test(text);
-              en.details.mouthpiece = en.details.mouthpiece ?? /マウスピース/.test(text);
-            }
-            return en;
-          });
-
-          // APIレスポンスにないカテゴリはローカル解析から補完
-          // （例：APIが食事だけ返して睡眠を忘れた場合、ローカルの睡眠エントリを追加）
-          const aiCats = new Set(aiEntries.flatMap(e=>e.categories||[e.category]));
-          const localCats = new Set(localEntries.flatMap(e=>e.categories||[e.category]));
-          for(const cat of localCats){
-            if(!aiCats.has(cat)){
-              const missing = localEntries.filter(e=>(e.categories||[e.category]).includes(cat));
-              aiEntries.push(...missing);
-            }
-          }
-
-          pendingEntries = aiEntries;
-          usedRealAI = true;
-        }
-      }catch(err){ console.log('AI unavailable, using local parse'); }
-    }
+    const usedRealAI = false;
 
     // 写真解析（1枚・内容をAIが自動判定）
     if(singlePhoto){
@@ -1712,15 +1669,7 @@ function commitSave(){
 
   try{
     const targetDate = saveDate || todayKey;
-
-    // ai_commentが未設定のエントリに生成（失敗しても保存は続行）
-    const toSave = pendingEntries.slice().map(e=>{
-      if(e.details && !e.details.ai_comment && e.details.raw){
-        try{ e.details.ai_comment = generateAIResponse(e.details.raw); }
-        catch(err){ console.error('[commitSave ai_comment]', err); }
-      }
-      return e;
-    });
+    const toSave = pendingEntries.slice();
     pendingEntries  = [];
     pendingAiComment= '';
 
@@ -1762,6 +1711,7 @@ function commitSave(){
     refreshLive();
     buildTodaySaved();
     showToast(`${targetDate} に保存しました ✓`);
+    setTimeout(() => goNav('history'), 600);
   } catch(err){
     console.error('[commitSave fatal]', err);
     // 最低限、生テキストだけは保存する
@@ -1867,6 +1817,7 @@ function saveToday(){
     const badge=document.getElementById('save-date-badge'); if(badge) badge.textContent='今日';
     const sb=document.getElementById('save-btn'); if(sb) sb.textContent='今日の記録を保存する';
     showToast(`${targetDate} の記録を保存しました ✓`);
+    setTimeout(() => goNav('history'), 600);
   } finally {
     setTimeout(()=>{ _isSaving = false; }, 300);
   }
@@ -1931,19 +1882,19 @@ function renderHistory(c){
   </div>` : '';
 
   c.innerHTML = streakBadge + all.slice(0,90).map((day, di) => {
-    const sleepE = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
-    const finBal = (day.entries||[]).filter(e=>e.category==='finance').reduce((s,e)=>s+(e.details?.transaction_type==='income'?e.details?.amount||0:-(e.details?.amount||0)),0);
+    const sleepE = day.entries?.find(e=>hasCat(e,'sleep')&&e.details?.duration_h);
+    const finBal = (day.entries||[]).filter(e=>hasCat(e,'finance')).reduce((s,e)=>s+(e.details?.transaction_type==='income'?e.details?.amount||0:-(e.details?.amount||0)),0);
     const mood = day.mood;
     const moodEmoji = mood ? ['','😞','😕','😐','🙂','😄'][mood] : '';
     const pills = [];
     if(sleepE) pills.push({t:`💤 ${sleepE.details.duration_h}h`, c:'sleep'});
-    if(day.entries?.some(e=>e.category==='meal')) pills.push({t:'🍱', c:'meal'});
-    if(day.entries?.some(e=>e.category==='skin')) pills.push({t:'✨', c:'skin'});
-    if(day.entries?.some(e=>e.category==='body')) pills.push({t:'🏃', c:'body'});
-    if(day.entries?.some(e=>e.category==='finance')) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
-    const tempE = day.entries?.find(e=>e.category==='temp'&&e.details?.temp_c);
+    if(day.entries?.some(e=>hasCat(e,'meal'))) pills.push({t:'🍱', c:'meal'});
+    if(day.entries?.some(e=>hasCat(e,'skin'))) pills.push({t:'✨', c:'skin'});
+    if(day.entries?.some(e=>hasCat(e,'body'))) pills.push({t:'🏃', c:'body'});
+    if(day.entries?.some(e=>hasCat(e,'finance'))) pills.push({t:`💴 ¥${finBal.toLocaleString()}`, c:'finance'});
+    const tempE = day.entries?.find(e=>hasCat(e,'temp')&&e.details?.temp_c);
     if(tempE) pills.push({t:`🌡 ${tempE.details.temp_c}℃`, c:'temp'});
-    const weightE = day.entries?.find(e=>e.category==='weight'&&e.details?.weight_kg);
+    const weightE = day.entries?.find(e=>hasCat(e,'weight')&&e.details?.weight_kg);
     if(weightE) pills.push({t:`⚖ ${weightE.details.weight_kg}kg`, c:'weight'});
     if(moodEmoji) pills.push({t:moodEmoji, c:'other'});
 
@@ -2063,7 +2014,7 @@ async function reanalyzeEntry(date, ei){
 // ════════════════════════
 function buildSleepConditionTable(){
   const all = getAll();
-  const sleepDays = all.filter(d=>d.entries?.some(e=>e.category==='sleep'&&e.details?.duration_h));
+  const sleepDays = all.filter(d=>d.entries?.some(e=>hasCat(e,'sleep')&&e.details?.duration_h));
   if(sleepDays.length < 5) return '';
 
   // Build condition groups: med x mp (4 combos)
@@ -2075,7 +2026,7 @@ function buildSleepConditionTable(){
   };
 
   sleepDays.forEach((day, di) => {
-    const se = day.entries.find(e=>e.category==='sleep'&&e.details?.duration_h);
+    const se = day.entries.find(e=>hasCat(e,'sleep')&&e.details?.duration_h);
     const med = !!se.details?.medication;
     const mp  = !!se.details?.mouthpiece;
     const key = `眠剤${med?'あり':'なし'}＋MP ${mp?'あり':'なし'}`;
@@ -2137,7 +2088,7 @@ function buildHabitRates(){
   ];
 
   const bars = habits.map(h => {
-    const count = slice.filter(d=>d.entries?.some(e=>e.category===h.cat)).length;
+    const count = slice.filter(d=>d.entries?.some(e=>hasCat(e,h.cat))).length;
     const pct = Math.round(count/n*100);
     const color = pct>=70?'var(--green-s)':pct>=40?'var(--accent2)':'var(--red-s)';
     return `<div style="margin-bottom:10px">
@@ -2224,9 +2175,9 @@ function buildWeekdayRadar(){
     const d = new Date(day.date.replace(/\./g,'-'));
     const dow = d.getDay();
     byDow[dow].days++;
-    const se = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+    const se = day.entries?.find(e=>hasCat(e,'sleep')&&e.details?.duration_h);
     if(se) byDow[dow].sleep.push(se.details.duration_h);
-    byDow[dow].meals += day.entries?.filter(e=>e.category==='meal').length||0;
+    byDow[dow].meals += day.entries?.filter(e=>hasCat(e,'meal')).length||0;
   });
 
   const avgSleep = byDow.map(x=>x.sleep.length?+(x.sleep.reduce((s,v)=>s+v,0)/x.sleep.length).toFixed(1):0);
@@ -2278,7 +2229,7 @@ function buildMonthlyCards(){
     const recordedDays = days.length;
 
     // Sleep stats
-    const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='sleep'&&e.details?.duration_h);
+    const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'sleep')&&e.details?.duration_h);
     const avgSleep = sleepEntries.length ? (sleepEntries.reduce((s,e)=>s+e.details.duration_h,0)/sleepEntries.length).toFixed(1) : null;
     const medDays = sleepEntries.filter(e=>e.details?.medication).length;
 
@@ -2302,15 +2253,15 @@ function buildMonthlyCards(){
     })() : null;
 
     // 食事バランス（タンパク質推定合計）
-    const mealEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+    const mealEntries = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'meal'));
     const totalProtein = mealEntries.reduce((s,e)=>{
       if(e.details?.protein_g) return s+e.details.protein_g;
       return s + estimateNutrition(e.details?.raw||e.summary||'').p;
     }, 0);
-    const mealDaysCount = days.filter(d=>d.entries?.some(e=>e.category==='meal')).length;
+    const mealDaysCount = days.filter(d=>d.entries?.some(e=>hasCat(e,'meal'))).length;
 
     // Exercise stats
-    const exCount = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='body').length;
+    const exCount = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'body')).length;
 
     // Mood avg
     const moodDays = days.filter(d=>d.mood);
@@ -2318,7 +2269,7 @@ function buildMonthlyCards(){
     const moodEmoji = avgMood ? ['','😞','😕','😐','🙂','😄'][Math.round(avgMood)] : '';
 
     // Finance
-    const finEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='finance');
+    const finEntries = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'finance'));
     const totalExp = finEntries.filter(e=>e.details?.transaction_type==='expense').reduce((s,e)=>s+(e.details?.amount||0),0);
     const totalInc = finEntries.filter(e=>e.details?.transaction_type==='income').reduce((s,e)=>s+(e.details?.amount||0),0);
 
@@ -2390,10 +2341,10 @@ function buildWeeklySummary(){
   const week14 = all.filter(d => d.date >= key14 && d.date < key7);
 
   function calcWeek(days){
-    const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='sleep'&&e.details?.duration_h);
-    const mealEntries  = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
-    const bodyEntries  = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='body');
-    const finEntries   = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='finance'&&e.details?.transaction_type==='expense');
+    const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'sleep')&&e.details?.duration_h);
+    const mealEntries  = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'meal'));
+    const bodyEntries  = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'body'));
+    const finEntries   = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'finance')&&e.details?.transaction_type==='expense');
 
     // 平均睡眠（h）
     const avgSleep = sleepEntries.length
@@ -2599,13 +2550,13 @@ function timeLabel(mins){
 
 function buildCharts(days){
   // Data extraction
-  const getSleep = d => d.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+  const getSleep = d => d.entries?.find(e=>hasCat(e,'sleep')&&e.details?.duration_h);
 
   const durVals   = d => { const s=getSleep(d); return s?s.details.duration_h:null; };
   const bedVals   = d => { const s=getSleep(d); return s?sleepStartMinutes(s.details):null; };
   const wakeVals  = d => { const s=getSleep(d); if(!s) return null; return wakeMinutes(s.details)||
     (sleepStartMinutes(s.details)!==null ? (sleepStartMinutes(s.details)+s.details.duration_h*60)%1440 : null); };
-  const mealVals  = d => d.entries?.filter(e=>e.category==='meal').length||0;
+  const mealVals  = d => d.entries?.filter(e=>hasCat(e,'meal')).length||0;
   const finVals   = d => Math.abs((d.entries||[]).filter(e=>e.category==='finance').reduce((s,e)=>s-(e.details?.amount||0),0));
 
   const hasBed  = days.some(d=>bedVals(d)!==null);
@@ -2850,7 +2801,7 @@ function exportMonthToGoogleDrive(ym){
   if(!days.length){ showToast('この月のデータがありません'); return; }
 
   // 集計
-  const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='sleep'&&e.details?.duration_h);
+  const sleepEntries = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'sleep')&&e.details?.duration_h);
   const avgSleep = sleepEntries.length
     ? (sleepEntries.reduce((s,e)=>s+e.details.duration_h,0)/sleepEntries.length).toFixed(1) : '—';
   const minSleep = sleepEntries.length ? Math.min(...sleepEntries.map(e=>e.details.duration_h)).toFixed(1) : '—';
@@ -2868,7 +2819,7 @@ function exportMonthToGoogleDrive(ym){
   const bedAvgStr = bedAvg !== null
     ? `${String(Math.floor(bedAvg%24)).padStart(2,'0')}:${String(Math.round((bedAvg%1)*60)).padStart(2,'0')}` : '—';
 
-  const mealEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='meal');
+  const mealEntries = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'meal'));
   const totalProtein = Math.round(mealEntries.reduce((s,e)=>{
     if(e.details?.protein_g) return s+e.details.protein_g;
     return s+estimateNutrition(e.details?.raw||e.summary||'').p;
@@ -2876,8 +2827,8 @@ function exportMonthToGoogleDrive(ym){
   const totalFat = Math.round(mealEntries.reduce((s,e)=>s+estimateNutrition(e.details?.raw||e.summary||'').f,0));
   const totalCarbs = Math.round(mealEntries.reduce((s,e)=>s+estimateNutrition(e.details?.raw||e.summary||'').c,0));
 
-  const exCount = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='body').length;
-  const finEntries = days.flatMap(d=>d.entries||[]).filter(e=>e.category==='finance');
+  const exCount = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'body')).length;
+  const finEntries = days.flatMap(d=>d.entries||[]).filter(e=>hasCat(e,'finance'));
   const totalExp = finEntries.filter(e=>e.details?.transaction_type==='expense').reduce((s,e)=>s+(e.details?.amount||0),0);
 
   // レポートテキスト生成
@@ -2899,7 +2850,7 @@ function exportMonthToGoogleDrive(ym){
       : '',
     ``,
     `【食事・栄養（推定）】`,
-    `  食事記録日数 : ${days.filter(d=>d.entries?.some(e=>e.category==='meal')).length}日`,
+    `  食事記録日数 : ${days.filter(d=>d.entries?.some(e=>hasCat(e,'meal'))).length}日`,
     `  タンパク質合計: ${totalProtein}g`,
     `  脂質合計     : ${totalFat}g`,
     `  糖質合計     : ${totalCarbs}g`,
@@ -2912,10 +2863,10 @@ function exportMonthToGoogleDrive(ym){
     ``,
     `【日別サマリー】`,
     ...days.map(day=>{
-      const se = day.entries?.find(e=>e.category==='sleep'&&e.details?.duration_h);
+      const se = day.entries?.find(e=>hasCat(e,'sleep')&&e.details?.duration_h);
       const sleepStr = se ? `睡眠${se.details.duration_h}h${se.details.bed_time?` (${se.details.bed_time}〜${se.details.wake_time||'?'})`:''}`:'睡眠記録なし';
-      const hasMeal = day.entries?.some(e=>e.category==='meal') ? '食事✓' : '';
-      const hasEx   = day.entries?.some(e=>e.category==='body') ? '運動✓' : '';
+      const hasMeal = day.entries?.some(e=>hasCat(e,'meal')) ? '食事✓' : '';
+      const hasEx   = day.entries?.some(e=>hasCat(e,'body')) ? '運動✓' : '';
       return `  ${day.date}  ${sleepStr}  ${hasMeal}  ${hasEx}`;
     }),
     ``,
